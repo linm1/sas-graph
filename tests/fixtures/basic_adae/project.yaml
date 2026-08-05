@@ -1,0 +1,15 @@
+# Dev plan section 8. Paths are relative to this file, not absolute as in the
+# plan's example, so the fixture stays portable across checkouts.
+main_program: adae.sas
+setup_file: setup.sas
+
+allowed_roots:
+  - .
+
+macro_roots:
+  - macros
+
+macro_contracts:
+  - contracts
+
+output_dir: graph_runs

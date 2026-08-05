@@ -1,0 +1,117 @@
+/* Toolbar palette+layout ported from
+   .scratch/prototype-search-pad-narrow/variant-1-icon-rail.html (locked).
+   Hardcoded to match that token set exactly, not the VS Code theme API —
+   consistent with the rest of this file's existing approach (also
+   hardcoded, pre-dates this change).
+   Narrow-sidebar rework: the pill only ever holds #search + one filter
+   toggle now, so it fits a ~400px sidebar even with a SAS editor open
+   alongside it. Type/library/hop controls live in a popover anchored under
+   the toggle instead of inline. #status is fully decoupled — its own
+   borderless line beneath the pill, not a bordered pill segment (a second
+   bordered capsule stacked under the toolbar's bordered pill read as one
+   fused two-row block; dropping its border/background fixes that). */
+html, body { margin: 0; height: 100%; background: #181715; color: #faf9f5; font-family: "Segoe UI", -apple-system, "Inter", sans-serif; }
+
+#network { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+
+#toolbar {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 6px;
+  background: #252320; border: 1px solid #35322d;
+  border-radius: 9999px; padding: 6px 8px 6px 16px;
+  box-shadow: 0 1px 3px rgba(20,20,19,.08), 0 8px 24px rgba(0,0,0,.35); z-index: 10;
+  max-width: min(340px, calc(100vw - 24px));
+}
+
+#search {
+  flex: 1 1 auto; min-width: 0; height: 30px; padding: 0; border: none; background: transparent;
+  font: 13px "Segoe UI", -apple-system, "Inter", sans-serif; color: #faf9f5;
+}
+#search::placeholder { color: #a09d96; }
+#search:focus { outline: none; }
+
+#filterToggle {
+  flex: none; width: 32px; height: 32px; border-radius: 50%; border: 1px solid transparent;
+  background: transparent; color: #a09d96; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; position: relative;
+}
+#filterToggle:hover { background: #1f1e1b; color: #faf9f5; }
+#filterToggle.active { background: rgba(204, 120, 92, 0.18); color: #cc785c; border-color: #cc785c; }
+#filterToggle svg { width: 16px; height: 16px; }
+#filterBadge {
+  position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%;
+  background: #cc785c; display: none;
+}
+#filterBadge.show { display: block; }
+
+#filterPopover {
+  position: fixed; top: 52px; left: 50%; transform: translateX(-50%) translateY(-8px);
+  width: 260px; background: #252320; border: 1px solid #35322d;
+  border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(20,20,19,.08), 0 8px 24px rgba(0,0,0,.4);
+  z-index: 11; opacity: 0; pointer-events: none; transition: opacity 150ms ease, transform 150ms ease;
+  display: flex; flex-direction: column; gap: 12px;
+}
+#filterPopover.open { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+
+.filter-row { display: flex; gap: 8px; }
+.filter-select {
+  flex: 1 1 0; min-width: 0; height: 30px; padding: 0 8px; box-sizing: border-box;
+  border-radius: 6px; border: 1px solid #35322d; background: #1f1e1b;
+  color: #faf9f5; font: 12px "Segoe UI", -apple-system, "Inter", sans-serif; cursor: pointer;
+}
+.filter-select:focus { outline: none; border-color: #cc785c; }
+
+#hopGroup { border-top: 1px solid #35322d; padding-top: 12px; }
+#hopHeader { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+#hopHeader label {
+  font-size: 11px; color: #a09d96; text-transform: uppercase; letter-spacing: 0.8px;
+}
+
+#hopCeiling {
+  -webkit-appearance: none; width: 100%; height: 4px; background: #35322d;
+  border-radius: 9999px; outline: none;
+}
+#hopCeiling::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: #cc785c; cursor: pointer; border: 2px solid #252320;
+}
+#hopCeiling::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%; background: #cc785c; cursor: pointer; border: none;
+}
+
+#hopValue {
+  font: 600 13px "Segoe UI", -apple-system, "Inter", sans-serif; color: #cc785c;
+}
+
+#status {
+  position: fixed; top: 68px; left: 50%; transform: translateX(-50%);
+  padding: 0 8px; font: 500 11px "Segoe UI", -apple-system, "Inter", sans-serif;
+  color: #a09d96; letter-spacing: 0.3px; white-space: nowrap; z-index: 9;
+  max-width: calc(100vw - 24px); overflow: hidden; text-overflow: ellipsis;
+}
+
+#info {
+  position: fixed; left: 0; right: 0; bottom: 0; max-height: 42vh;
+  background: #252526; border-top: 1px solid #3c3c3c;
+  border-radius: 10px 10px 0 0; padding: 16px 24px;
+  box-shadow: 0 -4px 16px rgba(0,0,0,.4); overflow: auto;
+  transform: translateY(100%); transition: transform 220ms ease-out; z-index: 9;
+}
+#info.open { transform: translateY(0); }
+#info .type {
+  display: inline-block; color: #fff; border-radius: 3px;
+  padding: 2px 8px; font-size: 12px; font-weight: 500; margin-bottom: 6px;
+}
+#info b { display: block; margin-bottom: 6px; font-size: 22px; font-weight: 500; }
+#info dl { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0 20px; margin: 8px 0 0; }
+#info dt { font-weight: 500; color: #999; margin-top: 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+#info dd { margin: 2px 0 0; white-space: pre-wrap; word-break: break-word; color: #ddd; font-size: 13px; }
+#info pre {
+  background: #1e1e1e; border: 1px solid #3c3c3c; padding: 8px;
+  border-radius: 4px; margin: 4px 0 0; white-space: pre-wrap; word-break: break-word;
+  font: 12px monospace; color: #ddd; grid-column: 1 / -1;
+}
+#info .finding {
+  border: 1px solid #F1A340; border-radius: 4px; padding: 8px; margin-top: 8px; grid-column: 1 / -1;
+  background: rgba(241, 163, 64, 0.08);
+}

@@ -1,0 +1,35 @@
+# Planning surfaces, kept out of the repo deliberately.
+# Module docstrings cite this document by section number; it lives outside git.
+sas_graph_dev_plan.md
+wayfinder/
+.scratch/
+handoff-*.md
+*.session.md
+.worktrees/
+
+# Generated run output (dev plan section 4: runs/<run_id>/)
+runs/
+graph_runs/
+**/graph_runs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments and builds
+.venv/
+venv/
+env/
+build/
+dist/
+
+# Editor and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+

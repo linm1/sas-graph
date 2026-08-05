@@ -1,0 +1,5 @@
+.claude/**
+test/**
+tsconfig.json
+package-lock.json
+*.vsix

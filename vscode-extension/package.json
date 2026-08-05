@@ -1,0 +1,51 @@
+{
+  "name": "sas-graph-explorer",
+  "displayName": "SAS Graph Explorer",
+  "description": "Interactive node-link viewer for sas-graph run output (graph.json), wired to SAS source in the editor.",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Visualization", "Other"],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onView:sasGraph.sidebar",
+    "onCommand:sasGraph.openGraphView",
+    "onCommand:sasGraph.openGraphViewManual"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sasGraph",
+          "title": "SAS Graph",
+          "icon": "media/graph.svg"
+        }
+      ]
+    },
+    "views": {
+      "sasGraph": [
+        {
+          "id": "sasGraph.sidebar",
+          "name": "Graph",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "sasGraph.openGraphView",
+        "title": "SAS Graph: Open Graph View"
+      },
+      {
+        "command": "sasGraph.openGraphViewManual",
+        "title": "SAS Graph: Open Graph View (choose graph.json manually)"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/**/*.test.js"
+  },
+  "devDependencies": {}
+}
