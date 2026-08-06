@@ -1110,7 +1110,9 @@ def test_inactive_edges_point_to_their_exact_commented_statement(tmp_path):
     assert write["source"]["original_text"] == "  data work.disabled;"
     assert read["source"]["line_start"] == 3
     assert read["source"]["original_text"] == "  set sdtm.dm;"
-    assert depends["source"] == read["source"] | {"rule": "inactive_candidate_depends_on"}
+    assert depends["source"] == dict(
+        read["source"], rule="inactive_candidate_depends_on"
+    )
     assert {(edge["dataset_name"], edge["source"]["line_start"], edge["source"]["original_text"]) for edge in mentions} == {
         ("work.disabled", 2, "  data work.disabled;"),
         ("sdtm.dm", 3, "  set sdtm.dm;"),

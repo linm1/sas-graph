@@ -78,8 +78,9 @@ that directory is generated output, not source.
 - **Relative paths in `project.yaml` resolve against the config file**, not the
   working directory, so a config means the same thing from any shell.
 - **`allowed_roots` is a read boundary.** Every declared source file must resolve
-  inside one, checked with `Path.resolve()` and `is_relative_to()` so `..` and a
-  shared name prefix (`/study/adae-evil` against `/study/adae`) both fail.
+  inside one, checked with `Path.resolve()` and a component-aware relative-path
+  check so `..` and a shared name prefix (`/study/adae-evil` against
+  `/study/adae`) both fail. The check remains compatible with Python 3.8.
   `output_dir` is a write target and is deliberately not held to it — it is only
   refused if it points into a production or log location.
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import conftest  # noqa: F401  (puts src/ on sys.path)
 
+from sas_graph._paths import is_inside
 from sas_graph.config import load_config
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "basic_adae" / "project.yaml"
@@ -163,6 +164,15 @@ def test_sibling_directory_with_shared_prefix_is_not_inside_the_root():
 
     assert result.status == "FAILED"
     assert any("allowed_roots" in f["message"] for f in result.findings)
+
+
+def test_path_containment_is_compatible_with_python_38():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "adae"
+        root.mkdir()
+
+        assert is_inside(root / "child.sas", (root,))
+        assert not is_inside(root.parent / "adae-evil", (root,))
 
 
 def test_unreadable_required_file_fails():
