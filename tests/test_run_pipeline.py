@@ -788,8 +788,10 @@ def test_template_net_sort_evidence_is_visible_to_later_main_merge(tmp_path):
 def test_calls_inside_data_and_sql_blocks_are_captured_once_in_source_order(tmp_path):
     contracts = tmp_path / "contracts"
     contracts.mkdir()
-    (contracts / "contractit.md").write_text(
-        "# contractit\n\n## Purpose\n\nDoes a thing.\n\n## Parameters\n\n"
+    # gm-prefixed: the run() pipeline's lazy contract pre-pass only scans
+    # for `%gm\w+` call names (see run_pipeline._called_gm_macro_names).
+    (contracts / "gmcontractit.md").write_text(
+        "# gmcontractit\n\n## Purpose\n\nDoes a thing.\n\n## Parameters\n\n"
         "| Parameter | Description | Acceptable Values | Default Value |\n"
         "|---|---|---|---|\n"
         "| inds | Input. | LIBRARY.DATASET | REQUIRED |\n"
@@ -810,22 +812,22 @@ def test_calls_inside_data_and_sql_blocks_are_captured_once_in_source_order(tmp_
         "%gm_missing(inds=work.left);\n"
         "set sdtm.ae;\nrun;\n"
         "proc sql;\n"
-        "%contractit(inds=work.left, outds=work.contract_out);\n"
+        "%gmcontractit(inds=work.left, outds=work.contract_out);\n"
         "create table work.sql_out as select * from sdtm.dm;\n"
-        "%contractit(inds=work.left, outds=work.contract_late);\nquit;\n",
+        "%gmcontractit(inds=work.left, outds=work.contract_late);\nquit;\n",
         "macro_roots:\n  - macros\nmacro_contracts:\n  - contracts\n",
     )
 
     graph = run(result, run_id="calls-inside-blocks")
 
-    assert _macro_names(graph) == ["sourceit", "gm_missing", "contractit", "contractit"]
+    assert _macro_names(graph) == ["sourceit", "gm_missing", "gmcontractit", "gmcontractit"]
     assert [
         node["source"]["statement_order"]
         for node in graph["nodes"] if node["type"] == "MacroCall"
     ] == [2, 3, 7, 9]
     assert len([n for n in graph["nodes"] if n["type"] == "MacroCall"]) == 4
     assert any(n["type"] == "UnknownMacro" and n["label"] == "gm_missing" for n in graph["nodes"])
-    assert any(n["type"] == "MacroContract" and n["label"] == "contractit" for n in graph["nodes"])
+    assert any(n["type"] == "MacroContract" and n["label"] == "gmcontractit" for n in graph["nodes"])
     # A matched md-parsed contract has no role classification, so it infers
     # no dataset edges (wayfinder: bind-macro-calls-to-md-contracts.md).
     assert not any(

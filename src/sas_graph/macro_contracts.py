@@ -247,46 +247,98 @@ def parse_macro_doc(path, text=None):
     )
 
 
-def load_macro_contracts(macro_contract_roots, source_paths=None):
-    """Scan every `.md` file directly under each declared root.
+def _record_contract(contracts, contract):
+    """Insert `contract` into `contracts`, applying the same duplicate-name
+    collision handling regardless of which scan mode found it."""
+    macro_name = contract.macro.lower()
+    if macro_name in contracts:
+        existing = contracts[macro_name]
+        contracts[macro_name] = MacroContract(
+            macro=existing.macro,
+            purpose=existing.purpose,
+            parameters=existing.parameters,
+            examples=existing.examples,
+            path=existing.path,
+            errors=(
+                *existing.errors,
+                "duplicate contracts for macro name: "
+                f"{existing.path.as_posix()}, {contract.path.as_posix()}",
+            ),
+        )
+    else:
+        contracts[macro_name] = contract
 
-    A doc that fails to parse stays out of the index (see `parse_macro_doc`).
-    Two docs naming the same macro both get an errors entry noting the
-    duplicate paths; neither is usable -- same collision handling as the
-    prior YAML loader.
-    """
+
+def _load_one(path, source_paths):
+    """Read and parse one `.md` doc, or None for a prohibited/unreadable/
+    unheaded file -- shared by both the full-scan and filtered paths."""
+    if _prohibited_reason(path) is not None:
+        return None
+    try:
+        text = read_text(path, "utf-8", source_paths)
+    except OSError:
+        return None
+    if _macro_name_from_heading(text.splitlines()) is None:
+        return None
+    return parse_macro_doc(path, text=text)
+
+
+def _load_full_scan(macro_contract_roots, source_paths):
     contracts = {}
     for root in macro_contract_roots:
         root = Path(root)
         if not root.is_dir():
             continue
         for path in sorted(root.rglob("*.md")):
-            if _prohibited_reason(path) is not None:
+            contract = _load_one(path, source_paths)
+            if contract is not None:
+                _record_contract(contracts, contract)
+    return contracts
+
+
+def _load_filtered(macro_contract_roots, source_paths, macro_names):
+    """One flat directory listing per root, matched against wanted names
+    case-insensitively. A doc in a subdirectory of a root is not found here
+    -- unlike the full scan's `rglob` -- since the filter is only meant to
+    replace the expected "every doc directly under the root" shape.
+    """
+    wanted = {name.lower() for name in macro_names}
+    contracts = {}
+    for root in macro_contract_roots:
+        root = Path(root)
+        if not root.is_dir():
+            continue
+        by_stem = {
+            path.stem.lower(): path
+            for path in root.iterdir()
+            if path.is_file() and path.suffix.lower() == ".md"
+        }
+        for name in sorted(wanted):
+            path = by_stem.get(name)
+            if path is None:
                 continue
-            try:
-                text = read_text(path, "utf-8", source_paths)
-            except OSError:
-                continue
-            lines = text.splitlines()
-            macro = _macro_name_from_heading(lines)
-            if macro is None:
-                continue
-            contract = parse_macro_doc(path, text=text)
-            macro_name = contract.macro.lower()
-            if macro_name in contracts:
-                existing = contracts[macro_name]
-                contracts[macro_name] = MacroContract(
-                    macro=existing.macro,
-                    purpose=existing.purpose,
-                    parameters=existing.parameters,
-                    examples=existing.examples,
-                    path=existing.path,
-                    errors=(
-                        *existing.errors,
-                        "duplicate contracts for macro name: "
-                        f"{existing.path.as_posix()}, {contract.path.as_posix()}",
-                    ),
-                )
-            else:
-                contracts[macro_name] = contract
+            contract = _load_one(path, source_paths)
+            if contract is not None:
+                _record_contract(contracts, contract)
+    return contracts
+
+
+def load_macro_contracts(macro_contract_roots, source_paths=None, macro_names=None):
+    """Scan for `.md` macro docs under each declared root.
+
+    With `macro_names` omitted or empty, every `.md` file anywhere under each
+    root is parsed (recursive `rglob`) -- unchanged full-scan behavior. With
+    `macro_names` non-empty, each root gets one flat directory listing
+    instead (docs in subdirectories are not found in this mode) and only
+    filenames matching a wanted name (case-insensitive) are parsed.
+
+    A doc that fails to parse stays out of the index (see `parse_macro_doc`).
+    Two docs naming the same macro both get an errors entry noting the
+    duplicate paths; neither is usable -- same collision handling as the
+    prior YAML loader, in either scan mode.
+    """
+    if macro_names:
+        contracts = _load_filtered(macro_contract_roots, source_paths, macro_names)
+    else:
+        contracts = _load_full_scan(macro_contract_roots, source_paths)
     return MacroContractIndex(contracts=contracts)

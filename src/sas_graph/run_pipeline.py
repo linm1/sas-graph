@@ -13,7 +13,9 @@ the events that precede it in its own file.
 """
 
 import re
+from pathlib import Path
 
+from ._paths import prohibited_reason as _prohibited_reason
 from .blocks import group_blocks
 from .graph_model import GraphContext
 from .macro_contracts import load_macro_contracts
@@ -35,6 +37,41 @@ from .source_snapshot import read_text
 
 _MACRO_DEFINITION_START_RE = re.compile(r"^%macro\b", re.IGNORECASE)
 _MACRO_DEFINITION_END_RE = re.compile(r"^%mend\b", re.IGNORECASE)
+_GM_CALL_NAME_RE = re.compile(r"%(gm\w+)", re.IGNORECASE)
+
+
+def _called_gm_macro_names(config_result, source_paths=None):
+    """Pre-pass for lazy contract loading: every distinct `%gm...` name
+    appearing anywhere in the main program, setup file, or `.sas` files
+    under `macro_roots` -- no `%include` expansion, no macro-variable
+    resolution, comments and inactive branches included (over-fetch is fine,
+    a false positive here just loads one extra contract that goes unused).
+
+    File selection under `macro_roots` mirrors `build_macro_index`: `.sas`
+    files found via `rglob`, prohibited paths skipped before reading.
+    """
+    names = set()
+
+    def _scan(path):
+        try:
+            text = read_text(path, "utf-8-sig", source_paths)
+        except (OSError, UnicodeDecodeError):
+            return
+        names.update(match.group(1) for match in _GM_CALL_NAME_RE.finditer(text))
+
+    _scan(config_result.main_program)
+    if config_result.setup_file:
+        _scan(config_result.setup_file)
+    for root in config_result.macro_roots:
+        root = Path(root)
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.sas")):
+            if _prohibited_reason(path) is not None:
+                continue
+            _scan(path)
+
+    return names
 
 
 def _read_and_split(path, allowed_roots, source_paths=None):
@@ -276,7 +313,10 @@ def run(config_result, run_id, source_paths=None):
     )
 
     macro_index = build_macro_index(config_result.macro_roots, source_paths)
-    macro_contracts = load_macro_contracts(config_result.macro_contracts, source_paths)
+    called_macro_names = _called_gm_macro_names(config_result, source_paths)
+    macro_contracts = load_macro_contracts(
+        config_result.macro_contracts, source_paths, called_macro_names,
+    )
 
     # Section 9 step 4: setup.sas first, so LIBNAME/macro-variable evidence it
     # declares exists before the main program is parsed. Its own Steps/calls

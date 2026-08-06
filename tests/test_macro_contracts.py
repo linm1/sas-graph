@@ -8,12 +8,14 @@ import conftest  # noqa: F401
 import pytest
 
 from sas_graph import macro_contracts as macro_contracts_module
+from sas_graph.config import ConfigResult
 from sas_graph.macro_contracts import (
     DocParameter,
     _extract_examples,
     load_macro_contracts,
     parse_macro_doc,
 )
+from sas_graph.run_pipeline import _called_gm_macro_names
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CONTRACTS = FIXTURES / "qc_adae" / "contracts"
@@ -230,6 +232,123 @@ def test_duplicate_macro_name_across_files_makes_both_unusable(tmp_path):
 def test_declared_root_that_does_not_exist_yields_empty_index():
     index = load_macro_contracts([Path("does") / "not" / "exist"])
     assert index.get("anything") is None
+
+
+@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
+def test_macro_names_filter_loads_only_matching_macros():
+    if not _QC_ADAE_AVAILABLE:
+        return
+    index = load_macro_contracts([CONTRACTS], macro_names={"gmTrimVarLen"})
+
+    assert index.get("gmTrimVarLen") is not None
+    assert "gmcompare" not in index.contracts
+    assert "gmmergesupp" not in index.contracts
+    assert "gmmapdsattrib" not in index.contracts
+
+
+@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
+def test_macro_names_filter_case_insensitive_filename_match():
+    if not _QC_ADAE_AVAILABLE:
+        return
+    index = load_macro_contracts([CONTRACTS], macro_names={"GMTRIMVARLEN"})
+
+    contract = index.get("gmTrimVarLen")
+    assert contract is not None
+    assert contract.macro == "gmTrimVarLen"
+
+
+@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
+def test_macro_names_filter_with_no_matching_file_yields_no_contract():
+    if not _QC_ADAE_AVAILABLE:
+        return
+    index = load_macro_contracts([CONTRACTS], macro_names={"gm_does_not_exist"})
+
+    assert index.get("gm_does_not_exist") is None
+    assert index.contracts == {}
+
+
+@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
+def test_macro_names_filter_empty_preserves_full_scan_behavior():
+    if not _QC_ADAE_AVAILABLE:
+        return
+    filtered_full_scan = load_macro_contracts([CONTRACTS], macro_names=set())
+    unfiltered = load_macro_contracts([CONTRACTS])
+
+    assert filtered_full_scan.contracts == unfiltered.contracts
+    assert set(unfiltered.contracts) == {
+        "gmtrimvarlen", "gmcompare", "gmmergesupp", "gmmapdsattrib",
+    }
+
+
+def test_macro_names_filter_duplicate_filename_across_roots_still_collides(tmp_path):
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    body = (
+        "# gm_dup\n\n## Parameters\n\n"
+        "| Parameter | Description | Acceptable Values | Default Value |\n"
+        "|---|---|---|---|\n"
+        "| x | y | z | REQUIRED |\n"
+    )
+    (root_a / "gm_dup.md").write_text(body, encoding="utf-8")
+    (root_b / "gm_dup.md").write_text(body, encoding="utf-8")
+
+    contract = load_macro_contracts(
+        [root_a, root_b], macro_names={"gm_dup"}
+    ).get("gm_dup")
+
+    assert contract is not None
+    assert any("duplicate contracts for macro name" in error for error in contract.errors)
+
+
+def test_called_gm_macro_names_finds_calls_in_comments_and_inactive_branches(tmp_path):
+    """The pre-pass is a raw regex scan, not `%include`-aware or macro-state
+    aware: a name inside a comment or an untaken `%if 0` branch is still
+    picked up (over-fetch is acceptable/expected), and no `%include`
+    expansion is needed to find it. Also exercises `setup_file=None` and an
+    empty `macro_roots` tuple, since a validated run always sets these but
+    the pre-pass must not assume that."""
+    (tmp_path / "main.sas").write_text(
+        "/* %gmInComment(a=1); */\n"
+        "%if 0 %then %do;\n"
+        "  %gmInBranch(a=1);\n"
+        "%end;\n"
+        "%gmReal(a=1);\n",
+        encoding="utf-8",
+    )
+    config_result = ConfigResult(
+        status="SUCCESS",
+        main_program=tmp_path / "main.sas",
+        setup_file=None,
+        macro_roots=(),
+    )
+
+    names = _called_gm_macro_names(config_result)
+
+    assert names == {"gmInComment", "gmInBranch", "gmReal"}
+
+
+def test_called_gm_macro_names_scans_sas_files_under_macro_roots(tmp_path):
+    """A `%gm` call reachable only via a macro_roots `.sas` file (not the
+    main program or setup file) is still discovered."""
+    main = tmp_path / "main.sas"
+    main.write_text("%gmMain(a=1);\n", encoding="utf-8")
+    macro_dir = tmp_path / "macros"
+    (macro_dir / "nested").mkdir(parents=True)
+    (macro_dir / "nested" / "helper.sas").write_text(
+        "%gmFromMacroRoot(a=1);\n", encoding="utf-8",
+    )
+    config_result = ConfigResult(
+        status="SUCCESS",
+        main_program=main,
+        setup_file=None,
+        macro_roots=(macro_dir,),
+    )
+
+    names = _called_gm_macro_names(config_result)
+
+    assert names == {"gmMain", "gmFromMacroRoot"}
 
 
 def demo():
