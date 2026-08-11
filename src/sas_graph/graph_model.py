@@ -21,6 +21,8 @@ substitution.
 
 from dataclasses import dataclass, field
 
+from . import SCHEMA_VERSION
+
 
 def dataset_id(name):
     return f"dataset:{name}"
@@ -51,9 +53,20 @@ class GraphContext:
     `sort_by_of` maps a normalized dataset name to its last-known PROC SORT
     `by_vars`. Every sort also records its effective statement order in
     `sort_by_at`, so a completed DATA block can ignore later sort evidence.
+
+    For N declared programs (wayfinder: per-program-macro-state-isolation),
+    `run_pipeline.run` resets `sort_by_of`/`sort_by_at` to a setup-only
+    snapshot before each program's parse -- structural sort evidence from one
+    program's own body must not leak into another's merge-by-prefix check,
+    the same isolation already applied to `%let` state. `libref_map` is the
+    opposite call: it stays one cross-program-shared dict, never reset,
+    because nothing reads it yet (v0 does not resolve a libref to a physical
+    path for graph purposes, section 11.5) -- isolating write-only state that
+    has no observable behavior would be speculative. Revisit when a consumer
+    appears.
     """
 
-    main_program: str
+    main_programs: tuple
     setup_file: str
     run_id: str
     nodes: list = field(default_factory=list)
@@ -200,10 +213,10 @@ class GraphContext:
 
     def to_graph(self):
         return {
-            "schema_version": "0.1.0",
+            "schema_version": SCHEMA_VERSION,
             "run_id": self.run_id,
             "run_status": self.run_status(),
-            "main_program": self.main_program,
+            "main_programs": list(self.main_programs),
             "setup_file": self.setup_file,
             "nodes": self.nodes,
             "edges": self.edges,

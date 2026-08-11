@@ -8,8 +8,8 @@ is already idempotent by id, section 10.1's own posture for `Dataset`).
 `datafile=`/`out=`/`dbms=`/`sheet=`/`getnames=` are each matched by an
 independent, order-agnostic `re.search` over every statement in the block --
 the same pattern `rules_proc_sort.py`'s `_DATA_OPT_RE`/`_OUT_OPT_RE` use for
-DATA=/OUT=. Unlike PROC SORT, real usage (tests/fixtures/qc_adae/qc_adae.sas
-:141-146) puts `sheet=`/`getnames=` on their own statement lines inside the
+DATA=/OUT=. Unlike PROC SORT, `sheet=`/`getnames=` can appear on their own
+statement lines inside the
 block body, not just the opener, so the search runs over the whole block's
 text rather than `opener.text` alone.
 """

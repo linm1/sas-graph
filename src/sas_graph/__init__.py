@@ -5,4 +5,4 @@ section 4.1). Renderers always reload from JSON rather than reading an
 in-memory graph, per the generation order in section 4.2.
 """
 
-SCHEMA_VERSION = "0.1.0"
+SCHEMA_VERSION = "0.2.0"

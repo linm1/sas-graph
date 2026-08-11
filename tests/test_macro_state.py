@@ -29,7 +29,12 @@ from pathlib import Path
 
 import conftest  # noqa: F401  (puts src/ on sys.path)
 
-from sas_graph.macro_state import expand_includes, resolve_text, walk_let_statements
+from sas_graph.macro_state import (
+    expand_includes,
+    resolve_text,
+    walk_let_statements,
+    walk_runtime,
+)
 from sas_graph.statements import split_statements
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -543,6 +548,187 @@ def test_bound_double_ampersand_reference_is_not_substituted():
     resolved, unresolved = resolve_text("&&x", 2, events, return_unresolved=True)
     assert resolved == "&&x"
     assert unresolved == []
+
+
+# --- walk_runtime: %os_fvars binding -----------------------------------------
+
+
+def test_os_fvars_composes_base_plus_colon_path_with_one_trailing_slash():
+    result = split("%os_fvars(mvar=_x, projpath=a:b:c);\n")
+    surviving, events, findings, skipped = walk_runtime(
+        result.statements, os_fvars_base="/base/"
+    )
+
+    assert [e.value for e in events if e.name == "_x"] == ["/base/a/b/c/"]
+    assert findings == []
+    assert skipped == set()
+    assert surviving == []
+
+
+def test_os_fvars_projpath_resolves_when_type_bound_earlier():
+    result = split(
+        "%let _type = interim;\n%os_fvars(mvar=_x, projpath=&_type.:data:rawxls);\n"
+    )
+    _, events, findings, _ = walk_runtime(result.statements, os_fvars_base="/base/")
+
+    assert [e.value for e in events if e.name == "_x"] == ["/base/interim/data/rawxls/"]
+    assert findings == []
+
+
+def test_os_fvars_projpath_unbound_type_produces_no_binding_and_a_finding():
+    result = split("%os_fvars(mvar=_x, projpath=&_type.:data:rawxls);\n")
+    _, events, findings, _ = walk_runtime(result.statements, os_fvars_base="/base/")
+
+    assert [e for e in events if e.name == "_x"] == []
+    assert any(f["type"] == "os_fvars_unbound" for f in findings)
+
+
+def test_os_fvars_without_a_declared_base_binds_nothing():
+    """Regression guard: an existing config with no os_fvars_base declared
+    must behave exactly as it does today -- no binding, no finding."""
+    result = split("%os_fvars(mvar=_x, projpath=a:b:c);\n")
+    surviving, events, findings, _ = walk_runtime(result.statements, os_fvars_base=None)
+
+    assert surviving == []
+    assert events == []
+    assert findings == []
+
+
+# --- walk_runtime: %IF/%ELSE branch selection --------------------------------
+
+
+def test_taken_branch_binds_and_sibling_untaken_branch_does_not_overwrite():
+    result = split(
+        "%let _type = interim;\n"
+        "%IF &_type. = tabulate %then %do;\n"
+        "  %let _metadata = wrong;\n"
+        "%end;\n"
+        "%IF &_type. = interim %THEN %do;\n"
+        "  %let _metadata = right;\n"
+        "%end;\n"
+    )
+    surviving, events, findings, skipped = walk_runtime(result.statements)
+
+    assert [e.value for e in events if e.name == "_metadata"] == ["right"]
+    assert any(f["type"] == "macro_branch_not_taken" for f in findings)
+    # The untaken branch's own %let never reaches surviving_statements either.
+    assert "%let _metadata = wrong;" not in [s.text for s in surviving]
+
+
+def test_not_equal_operator_selects_correct_branch():
+    result = split(
+        "%let _type = odr;\n"
+        "%IF &_type. ^= odr %THEN %do;\n"
+        "  %let flag = should_not_bind;\n"
+        "%end;\n"
+    )
+    _, events, findings, skipped = walk_runtime(result.statements)
+
+    assert [e for e in events if e.name == "flag"] == []
+    assert any(f["type"] == "macro_branch_not_taken" for f in findings)
+    assert skipped == {2, 3, 4}
+
+
+def test_in_condition_selects_correct_branch():
+    result = split(
+        "%let _type = interim;\n"
+        "%IF &_type. in (odr interim) %THEN %do;\n"
+        "  %let flag = yes;\n"
+        "%end;\n"
+    )
+    _, events, _, _ = walk_runtime(result.statements)
+
+    assert [e.value for e in events if e.name == "flag"] == ["yes"]
+
+
+def test_multiline_or_chain_selects_correct_branch():
+    result = split(
+        "%let _type = primary;\n"
+        "%IF &_type. = dmc     or\n"
+        "    &_type. = interim or\n"
+        "    &_type. = primary or\n"
+        "    &_type. = odr        %THEN %do;\n"
+        "  %let flag = yes;\n"
+        "%end;\n"
+    )
+    _, events, _, _ = walk_runtime(result.statements)
+
+    assert [e.value for e in events if e.name == "flag"] == ["yes"]
+
+
+def test_else_branch_taken_when_if_is_false():
+    result = split(
+        "%let _type = interim;\n"
+        "%IF &_type. = tabulate %then %do;\n"
+        "  %let branch = tabulate;\n"
+        "%end;\n"
+        "%ELSE %DO;\n"
+        "  %let branch = other;\n"
+        "%end;\n"
+    )
+    _, events, findings, _ = walk_runtime(result.statements)
+
+    assert [e.value for e in events if e.name == "branch"] == ["other"]
+    assert any(f["type"] == "macro_branch_not_taken" for f in findings)
+
+
+def test_symexist_true_when_bound_earlier_false_when_not():
+    result = split(
+        "%let _rawrand = /some/path/;\n"
+        "%if %symexist(_rawrand) %then %do;\n"
+        "  %let bound_flag = yes;\n"
+        "%end;\n"
+        "%if %symexist(_rawspec) %then %do;\n"
+        "  %let unbound_flag = yes;\n"
+        "%end;\n"
+    )
+    _, events, findings, skipped = walk_runtime(result.statements)
+
+    assert [e.value for e in events if e.name == "bound_flag"] == ["yes"]
+    assert [e for e in events if e.name == "unbound_flag"] == []
+    assert any(f["type"] == "macro_branch_not_taken" for f in findings)
+
+
+def test_unresolvable_condition_yields_a_finding_and_keeps_its_body():
+    """`&_pgm` is never bound -- keeps today's posture: reported, not skipped."""
+    result = split(
+        "%IF &_pgm = gmlibvarlen_gmlib2xpt.sas %then %do;\n"
+        "  LIBNAME trim \"&_trim\" COMPRESS=yes;\n"
+        "%end;\n"
+    )
+    surviving, _, findings, skipped = walk_runtime(result.statements)
+
+    assert any(f["type"] == "macro_condition_unresolved" for f in findings)
+    assert 'LIBNAME trim "&_trim" COMPRESS=yes;' in [s.text for s in surviving]
+    assert skipped == set()
+
+
+def test_nested_conditionals_skip_without_leaking_statements():
+    """Skipping the outer branch must consume its inner %IF/%end pairs whole,
+    not leak the inner branch's statements into surviving_statements."""
+    result = split(
+        "%let _type = listings;\n"
+        "%IF &_type. = dmc or &_type. = interim %THEN %do;\n"
+        "  %os_fvars(mvar=_metadata, projpath=&_type.:data:metadata);\n"
+        "  %IF &_type. = interim %THEN %do;\n"
+        "    %let inner = should_not_bind;\n"
+        "  %end;\n"
+        "  %IF &_type. ^= odr %THEN %do;\n"
+        "    %let inner2 = should_not_bind;\n"
+        "  %end;\n"
+        "%end;\n"
+    )
+    surviving, events, findings, skipped = walk_runtime(
+        result.statements, os_fvars_base="/base/"
+    )
+
+    assert [e for e in events if e.name in ("inner", "inner2", "_metadata")] == []
+    assert [s.text for s in surviving] == ["%let _type = listings;"]
+    # Outer span: statements 2 (%IF) through 10 (outer %end), inclusive --
+    # both inner %IF/%end pairs (4-6, 7-9) consumed by depth-counting, not
+    # left dangling or double-counted.
+    assert skipped == {2, 3, 4, 5, 6, 7, 8, 9, 10}
+    assert sum(f["type"] == "macro_branch_not_taken" for f in findings) == 1
 
 
 def demo():

@@ -100,13 +100,13 @@ and prints its rendered output.
 
 ## The graph contract
 
-`examples/hand_written_graph.json` is the frozen `schema_version` `0.1.0`
+`examples/hand_written_graph.json` is the frozen `schema_version` `0.2.0`
 contract, hand-written per dev plan section 22. It is the reference for what
 the parser must emit and what consumers may rely on.
 
 ```json
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "run_status": "COMPLETE | PARTIAL | FAILED",
   "nodes": [{"id": "...", "type": "...", "label": "...", "source": {}}],
   "edges": [{"id": "...", "type": "...", "from": "...", "to": "...", "source": {}}],

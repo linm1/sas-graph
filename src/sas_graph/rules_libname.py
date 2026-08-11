@@ -15,7 +15,7 @@ from .rules_external_file import external_file_id
 _LIBNAME_RE = re.compile(
     r"""^libname\s+(\w+)\s+(?:
         (xlsx)\s+["'](.+?)["'](?:\s+[^;]+)? |
-        ["'](.+?)["']
+        ["'](.+?)["'](?:\s+[^;]+)?
     )\s*;?$""",
     re.IGNORECASE | re.VERBOSE,
 )

@@ -226,7 +226,7 @@ def apply(
         )
         if program_path is not None and definition.path == program_path:
             # Inline definition in the file already modeled by program_node_id
-            # (e.g. qc_adae.sas defining and calling its own macro) -- a
+            # (e.g. a program defining and calling its own macro) -- a
             # MacroSourceFile node here would just duplicate that Program/
             # SetupFile node, so `defined_in` points at it directly instead.
             ctx.add_edge("defined_in", definition_id, program_node_id, definition_source)

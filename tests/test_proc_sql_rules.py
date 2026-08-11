@@ -13,7 +13,7 @@ def build(text, file_name="adae.sas"):
     result = split_statements(text, file_name)
     blocks, _ = group_blocks(result.statements)
     events = walk_let_statements(result.statements)
-    ctx = GraphContext(main_program=file_name, setup_file="setup.sas", run_id="r1")
+    ctx = GraphContext(main_programs=[file_name], setup_file="setup.sas", run_id="r1")
     return blocks, ctx, events
 
 

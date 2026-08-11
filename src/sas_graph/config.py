@@ -39,12 +39,13 @@ class ConfigResult:
     status: str
     findings: list = field(default_factory=list)
     config_path: Path = None
-    main_program: Path = None
+    main_programs: tuple = ()
     setup_file: Path = None
     allowed_roots: tuple = ()
     macro_roots: tuple = ()
     macro_contracts: tuple = ()
     output_dir: Path = None
+    os_fvars_base: str = None
     source_snapshots: dict = field(default_factory=dict)
 
     @property
@@ -235,9 +236,22 @@ def load_config(config_path, source_snapshots=None):
             "whole-study folder search by default.",
         )
 
-    main_program = _check_required_file(
-        "main_program", raw.get("main_program"), base, roots, findings, source_snapshots
-    )
+    # `main_program` accepts scalar or list via the same `_as_single` coercion
+    # `setup_file` already uses (wayfinder: config-shape-for-n-programs), with
+    # the opposite cardinality rule: 1+ entries valid, each checked
+    # independently so one bad entry among N still surfaces every entry's
+    # findings in one pass (section 5.3) rather than stopping at the first.
+    # A missing key still produces exactly one missing-key finding, matching
+    # today's single-program behavior.
+    main_declared = _as_single(raw.get("main_program"))
+    main_programs = []
+    for raw_value in (main_declared or [None]):
+        resolved = _check_required_file(
+            "main_program", raw_value, base, roots, findings, source_snapshots
+        )
+        if resolved is not None:
+            main_programs.append(resolved)
+    main_programs = tuple(main_programs)
 
     setup_declared = _as_single(raw.get("setup_file"))
     setup_file = None
@@ -323,6 +337,27 @@ def load_config(config_path, source_snapshots=None):
             )
             output_dir = None
 
+    # `os_fvars_base` is never read from disk -- it is only composed into
+    # display strings by macro_state.py's %os_fvars binding, so it gets the
+    # same treatment as output_dir above but weaker still: no `_resolve`
+    # against the config directory (it isn't a local path) and no
+    # `allowed_roots` containment check (that list is the read boundary, and
+    # this value is never read). Optional key; absent means %os_fvars binds
+    # nothing, i.e. today's behavior.
+    os_fvars_base = None
+    if raw.get("os_fvars_base") not in (None, ""):
+        os_fvars_base = str(raw["os_fvars_base"])
+        reason = _prohibited_reason(os_fvars_base)
+        if reason is not None:
+            findings.add(
+                "os_fvars_base",
+                "config_prohibited_artifact",
+                f"`os_fvars_base` points into a prohibited location ({reason}): "
+                f"{os_fvars_base}.",
+                "Point os_fvars_base outside production and log trees.",
+            )
+            os_fvars_base = None
+
     # Section 5: a BLOCKED finding fails the run; anything softer leaves the
     # config usable but incomplete.
     if any(f["status"] == "BLOCKED" for f in findings.items):
@@ -335,11 +370,12 @@ def load_config(config_path, source_snapshots=None):
         status=status,
         findings=findings.items,
         config_path=config_path,
-        main_program=main_program,
+        main_programs=main_programs,
         setup_file=setup_file,
         allowed_roots=roots,
         macro_roots=optional.get("macro_roots", ()),
         macro_contracts=optional.get("macro_contracts", ()),
         output_dir=output_dir,
+        os_fvars_base=os_fvars_base,
         source_snapshots=source_snapshots,
     )

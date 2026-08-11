@@ -103,13 +103,13 @@ def test_manifest_records_config_provenance_and_source_hashes():
     result = load_config(FIXTURE)
     manifest = build_manifest(result, now=FROZEN)
 
-    assert manifest["schema_version"] == "0.1.0"
+    assert manifest["schema_version"] == "0.2.0"
     assert manifest["run_id"].startswith("20260729T234011Z-")
     assert manifest["run_status"] == "COMPLETE"
     assert manifest["generated_at"].startswith("2026-07-29T23:40:11")
     assert manifest["findings_count"] == 0
 
-    assert Path(manifest["config"]["main_program"]).name == "adae.sas"
+    assert [Path(p).name for p in manifest["config"]["main_programs"]] == ["adae.sas"]
     assert manifest["config"]["allowed_roots"]
 
     hashed = {Path(entry["path"]).name for entry in manifest["sources"]}
@@ -121,9 +121,8 @@ def test_manifest_records_config_provenance_and_source_hashes():
 def test_manifest_findings_count_reflects_the_run_graph_not_the_config_result():
     """A successful run's config_result.findings is always empty (config was
     valid) -- build_manifest must not silently report 0 findings when the
-    graph itself has real ones. Discovered during phase-5 acceptance: the
-    qc_adae run's manifest.json claimed findings_count: 0 alongside 39 real
-    findings in graph.json."""
+    graph itself has real ones. A prior acceptance run exposed this exact
+    mismatch between manifest.json and graph.json."""
     result = load_config(FIXTURE)
     graph = run(result, run_id="findings-count-check")
 
@@ -154,7 +153,7 @@ def test_failed_config_still_produces_a_manifest_naming_the_problem():
     assert manifest["run_status"] == "FAILED"
     assert manifest["findings_count"] >= 2
     assert [Path(entry["path"]).name for entry in manifest["sources"]] == ["project.yaml"]
-    assert manifest["config"]["main_program"] is None
+    assert manifest["config"]["main_programs"] == []
 
 
 def test_saved_manifest_round_trips_as_json():

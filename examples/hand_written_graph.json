@@ -1,8 +1,8 @@
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.2.0",
   "run_id": "handwritten-0001",
   "run_status": "PARTIAL",
-  "main_program": "adae.sas",
+  "main_programs": ["adae.sas"],
   "setup_file": "setup.sas",
 
   "nodes": [

@@ -289,6 +289,87 @@ def test_statement_source_matches_the_section_7_shape():
     assert source["rule"] == "data_step_start"
 
 
+# --- bare macro call ends a statement without a `;` ------------------------
+
+
+def test_bare_macro_call_followed_by_another_call_splits_without_semicolons():
+    """Sibling bare calls have no `;` between them."""
+    result = split_statements(
+        "%os_fvars(mvar=_trim, projpath=a:b:trim)\n"
+        "%os_fvars(mvar=_xpt, projpath=a:b:xpt)\n",
+        "t.sas",
+    )
+
+    assert texts(result) == [
+        "%os_fvars(mvar=_trim, projpath=a:b:trim)",
+        "%os_fvars(mvar=_xpt, projpath=a:b:xpt)",
+    ]
+    assert all(s.terminated for s in result.statements)
+
+
+def test_bare_macro_call_immediately_followed_by_end_splits_cleanly():
+    """The exact merge that corrupted %end; depth-counting before this fix."""
+    result = split_statements(
+        "%if x = y %then %do;\n"
+        "%os_fvars(mvar=_trim, projpath=a:b:trim)\n"
+        "%os_fvars(mvar=_xpt, projpath=a:b:xpt)\n"
+        "%end;\n",
+        "t.sas",
+    )
+
+    assert texts(result) == [
+        "%if x = y %then %do;",
+        "%os_fvars(mvar=_trim, projpath=a:b:trim)",
+        "%os_fvars(mvar=_xpt, projpath=a:b:xpt)",
+        "%end;",
+    ]
+
+
+def test_bare_macro_call_with_trailing_semicolon_is_unaffected():
+    """A semicolon-terminated call falls through to normal `;`-based emission
+    unchanged -- the new close-then-peek check only fires when NOT followed
+    by `;`, so `.text` keeps its own trailing `;` exactly like any other
+    statement (see test_splits_on_semicolons)."""
+    result = split_statements("%os_fvars(mvar=_x, projpath=a:b);\n", "t.sas")
+
+    assert texts(result) == ["%os_fvars(mvar=_x, projpath=a:b);"]
+    assert only(result).terminated is True
+
+
+def test_macro_call_embedded_in_a_larger_statement_keeps_accumulating():
+    """`%sysfunc(...)` used inside a `%let` must not be split at its own close."""
+    result = split_statements("%let x = %sysfunc(compress(a)) plus more;\n", "t.sas")
+
+    assert texts(result) == ["%let x = %sysfunc(compress(a)) plus more;"]
+
+
+def test_bare_macro_call_with_quoted_paren_in_args_is_not_desynced():
+    """A literal `)` inside a quoted arg must not close the call early."""
+    result = split_statements(
+        '%os_fvars(mvar=_x, projpath="a)b")\n%os_fvars(mvar=_y, projpath=c)\n',
+        "t.sas",
+    )
+
+    assert texts(result) == [
+        '%os_fvars(mvar=_x, projpath="a)b")',
+        "%os_fvars(mvar=_y, projpath=c)",
+    ]
+
+
+def test_macro_definition_header_with_parameter_list_is_unaffected():
+    """`%macro name(params);` must never be mistaken for a bare call on `%macro`."""
+    result = split_statements("%macro setup(a, b);\n%mend setup;\n", "t.sas")
+
+    assert texts(result) == ["%macro setup(a, b);", "%mend setup;"]
+
+
+def test_bare_macro_call_at_end_of_file_with_no_trailing_semicolon():
+    result = split_statements("%os_fvars(mvar=_x, projpath=a:b)", "t.sas")
+
+    assert texts(result) == ["%os_fvars(mvar=_x, projpath=a:b)"]
+    assert only(result).terminated is True
+
+
 # --- the committed fixture -------------------------------------------------
 
 

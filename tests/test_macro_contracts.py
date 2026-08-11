@@ -5,7 +5,6 @@ design-md-contract-shape.md for the locked shape."""
 from pathlib import Path
 
 import conftest  # noqa: F401
-import pytest
 
 from sas_graph import macro_contracts as macro_contracts_module
 from sas_graph.config import ConfigResult
@@ -18,72 +17,35 @@ from sas_graph.macro_contracts import (
 from sas_graph.run_pipeline import _called_gm_macro_names
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-CONTRACTS = FIXTURES / "qc_adae" / "contracts"
-# qc_adae is a real, anonymized client SAS program excluded from the public
-# repo (non-negotiable, see staging manifest). Skip the tests that depend on
-# it rather than failing when the fixture directory is absent.
-_QC_ADAE_AVAILABLE = CONTRACTS.exists()
-_QC_ADAE_SKIP_REASON = "tests/fixtures/qc_adae/ excluded from the public repo"
+CONTRACTS = FIXTURES / "synthetic_multi_program" / "contracts"
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_parses_gmmergesupp_purpose_parameters_and_examples():
-    if not _QC_ADAE_AVAILABLE:
-        return
-    contract = parse_macro_doc(CONTRACTS / "gmMergeSupp.md")
-
-    assert contract.macro == "gmMergeSupp"
-    assert not contract.errors
-    assert contract.purpose.startswith("This macro is designed to perform")
-    assert contract.parameters["dataMain"] == DocParameter(required=True)
-    assert contract.parameters["dataOut"] == DocParameter(required=True)
-    assert contract.parameters["selectType"] == DocParameter(required=False, default="ERROR")
-    assert any(example.startswith("%gmMergeSupp(dataMain=raw.ds") for example in contract.examples)
-
-
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_gmmergesupp_examples_exact_tuple_excludes_nrstr_prose_reference():
-    """Regression for the `%nrstr(%%)gmMergeSUPP(....)` prose bug: that line
-    (in the Discussion's `Call execute` snippet) names the doc's own macro
-    but through an `%nrstr` escape, not a real call -- it must not appear.
-    Exact-equality here (not `any(...startswith...)`) is the point: the old
-    assertion style let both the %nrstr bug and paren corruption slip past."""
-    if not _QC_ADAE_AVAILABLE:
-        return
-    contract = parse_macro_doc(CONTRACTS / "gmMergeSupp.md")
-
-    assert contract.examples == (
-        "%gmMergeSupp( dataMain = ,dataSupp = ,dataOut = ,selectQnam = "
-        ",selectQnamName = ,varsNum = ,qnamBlank = ,selectType = ERROR )",
-        "%gmMergeSupp(dataMain=raw.ds, dataOut=dsPlus)",
-        "%gmMergeSupp(dataMain=raw.lbCh, dataSupp= raw.suppLb, dataOut=lbChPlus, selectType = ABORT)",
-        "%gmMergeSupp(dataMain=raw.lb, dataOut=lbPlus, varsNum =lbArRef@visDay)",
-        "%gmMergeSupp(dataMain=raw.lb, dataSupp=raw.supplb, dataOut=lb, qnamBlank=blank01 @ blank02)",
-        "%gmMergeSupp(dataMain=raw.ae, dataSupp=raw.suppae, dataOut=ae, selectQnam=Y, "
-        "selectQnamNames=(qnam in (“MEDDRA”, “MEDDRAVER”)))",
+def _write_contract_docs(directory):
+    """Two neutral `%gm` docs -- two are needed so a name filter can be shown
+    to exclude the macro that was not asked for."""
+    (directory / "gmApplyLabels.md").write_text(
+        "# gmApplyLabels\n\n## Purpose\n\nDoes a thing.\n\n## Parameters\n\n"
+        "| Parameter | Description | Acceptable Values | Default Value |\n"
+        "|---|---|---|---|\n"
+        "| inds | Input. | LIBRARY.DATASET | REQUIRED |\n",
+        encoding="utf-8",
+    )
+    (directory / "gmTrimNames.md").write_text(
+        "# gmTrimNames\n\n## Purpose\n\nDoes a thing.\n\n## Parameters\n\n"
+        "| Parameter | Description | Acceptable Values | Default Value |\n"
+        "|---|---|---|---|\n"
+        "| dataIn | Input. | LIBRARY.DATASET | REQUIRED |\n",
+        encoding="utf-8",
     )
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_gmtrimvarlen_examples_exact_tuple_stops_unbalanced_call_at_semicolon():
-    """Regression for the unbalanced-paren fallback bug: the whole Discussion
-    section is one giant line in this fixture, so falling back to "next
-    newline" swallowed every following example into one bogus entry. The
-    fixed fallback stops at the call's own `;` instead, so the two later
-    adsl examples still come back as their own separate entries."""
-    if not _QC_ADAE_AVAILABLE:
-        return
-    contract = parse_macro_doc(CONTRACTS / "gmTrimVarLen.md")
+def test_fixture_contract_directory_loads_its_macro():
+    """The synthetic fixture's own contracts/ dir is a real, loadable index."""
+    index = load_macro_contracts([CONTRACTS])
 
-    assert contract.examples == (
-        "%GmTrimVarLen( dataIn= ,excludeVars= ,selectType=ABORT ,splitChar=@ )",
-        "%gmTrimVarLen(dataIn = datasetName, excludeVars = "
-        "&_fixedLengthVars@datasetSpecificVar1@datasetSpecificVar2)",
-        "%gmTrimVarLen(dataIn = ie)",
-        "%gmTrimVarLen(dataIn = lb, excludeVars = .*id@((?<!^lb).)*;",
-        "%gmTrimVarLen(dataIn = adsl, excludeVars = usubjId#armCd, splitChar = #)",
-        "%gmTrimVarLen(dataIn = adsl, excludeVars = (?!(var1|var2)$).*)",
-    )
+    contract = index.get("gmApplyLabels")
+    assert contract is not None
+    assert contract.parameters["inds"].required
 
 
 def test_extract_examples_excludes_a_different_macro_named_in_prose():
@@ -161,37 +123,24 @@ def test_repeated_contract_read_rejects_changed_bytes(monkeypatch, tmp_path):
     assert contract.purpose == "Original purpose text."
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_parses_gmcompare_examples_spanning_multiple_lines():
-    if not _QC_ADAE_AVAILABLE:
-        return
-    contract = parse_macro_doc(CONTRACTS / "gmCompare.md")
+def test_macro_name_case_preserved_but_lookup_is_case_insensitive(tmp_path):
+    """Heading casing differs from call-syntax casing -- the index still
+    finds it by any case, and preserves the heading's own casing."""
+    _write_contract_docs(tmp_path)
 
-    assert contract.macro == "gmCompare"
-    assert contract.parameters["dataMain"] == DocParameter(required=True)
-    assert contract.parameters["libraryQC"] == DocParameter(required=True)
-    assert any("dataMain = main.ae" in example for example in contract.examples)
+    index = load_macro_contracts([tmp_path])
 
-
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_macro_name_case_preserved_but_lookup_is_case_insensitive():
-    """gmTrimVarLen.md: heading casing differs from call-syntax casing --
-    the index still finds it by any case."""
-    if not _QC_ADAE_AVAILABLE:
-        return
-    index = load_macro_contracts([CONTRACTS])
-
-    contract = index.get("GMTRIMVARLEN")
+    contract = index.get("GMTRIMNAMES")
     assert contract is not None
-    assert contract.macro == "gmTrimVarLen"
+    assert contract.macro == "gmTrimNames"
     assert contract.parameters["dataIn"].required
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_unresolved_macro_has_no_contract():
-    if not _QC_ADAE_AVAILABLE:
-        return
-    index = load_macro_contracts([CONTRACTS])
+def test_unresolved_macro_has_no_contract(tmp_path):
+    _write_contract_docs(tmp_path)
+
+    index = load_macro_contracts([tmp_path])
+
     assert index.get("gm_missing") is None
 
 
@@ -234,50 +183,45 @@ def test_declared_root_that_does_not_exist_yields_empty_index():
     assert index.get("anything") is None
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_macro_names_filter_loads_only_matching_macros():
-    if not _QC_ADAE_AVAILABLE:
-        return
-    index = load_macro_contracts([CONTRACTS], macro_names={"gmTrimVarLen"})
+def test_macro_names_filter_loads_only_matching_macros(tmp_path):
+    _write_contract_docs(tmp_path)
 
-    assert index.get("gmTrimVarLen") is not None
-    assert "gmcompare" not in index.contracts
-    assert "gmmergesupp" not in index.contracts
-    assert "gmmapdsattrib" not in index.contracts
+    index = load_macro_contracts([tmp_path], macro_names={"gmTrimNames"})
+
+    assert index.get("gmTrimNames") is not None
+    assert "gmapplylabels" not in index.contracts
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_macro_names_filter_case_insensitive_filename_match():
-    if not _QC_ADAE_AVAILABLE:
-        return
-    index = load_macro_contracts([CONTRACTS], macro_names={"GMTRIMVARLEN"})
+def test_macro_names_filter_case_insensitive_filename_match(tmp_path):
+    _write_contract_docs(tmp_path)
 
-    contract = index.get("gmTrimVarLen")
+    index = load_macro_contracts([tmp_path], macro_names={"GMTRIMNAMES"})
+
+    contract = index.get("gmTrimNames")
     assert contract is not None
-    assert contract.macro == "gmTrimVarLen"
+    assert contract.macro == "gmTrimNames"
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_macro_names_filter_with_no_matching_file_yields_no_contract():
-    if not _QC_ADAE_AVAILABLE:
-        return
-    index = load_macro_contracts([CONTRACTS], macro_names={"gm_does_not_exist"})
+def test_macro_names_filter_with_no_matching_file_yields_no_contract(tmp_path):
+    _write_contract_docs(tmp_path)
+
+    index = load_macro_contracts([tmp_path], macro_names={"gm_does_not_exist"})
 
     assert index.get("gm_does_not_exist") is None
     assert index.contracts == {}
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_macro_names_filter_empty_preserves_full_scan_behavior():
-    if not _QC_ADAE_AVAILABLE:
-        return
-    filtered_full_scan = load_macro_contracts([CONTRACTS], macro_names=set())
-    unfiltered = load_macro_contracts([CONTRACTS])
+def test_macro_names_filter_empty_preserves_full_scan_behavior(tmp_path):
+    """An empty (falsy) filter is not "match nothing" -- it must fall back to
+    the unfiltered full scan."""
+    _write_contract_docs(tmp_path)
 
-    assert filtered_full_scan.contracts == unfiltered.contracts
-    assert set(unfiltered.contracts) == {
-        "gmtrimvarlen", "gmcompare", "gmmergesupp", "gmmapdsattrib",
-    }
+    filtered_full_scan = load_macro_contracts([tmp_path], macro_names=set())
+    unfiltered = load_macro_contracts([tmp_path])
+
+    assert set(filtered_full_scan.contracts) == set(unfiltered.contracts)
+    assert filtered_full_scan.get("gmApplyLabels") is not None
+    assert filtered_full_scan.get("gmTrimNames") is not None
 
 
 def test_macro_names_filter_duplicate_filename_across_roots_still_collides(tmp_path):
@@ -319,7 +263,7 @@ def test_called_gm_macro_names_finds_calls_in_comments_and_inactive_branches(tmp
     )
     config_result = ConfigResult(
         status="SUCCESS",
-        main_program=tmp_path / "main.sas",
+        main_programs=(tmp_path / "main.sas",),
         setup_file=None,
         macro_roots=(),
     )
@@ -341,7 +285,7 @@ def test_called_gm_macro_names_scans_sas_files_under_macro_roots(tmp_path):
     )
     config_result = ConfigResult(
         status="SUCCESS",
-        main_program=main,
+        main_programs=(main,),
         setup_file=None,
         macro_roots=(macro_dir,),
     )
@@ -349,6 +293,27 @@ def test_called_gm_macro_names_scans_sas_files_under_macro_roots(tmp_path):
     names = _called_gm_macro_names(config_result)
 
     assert names == {"gmMain", "gmFromMacroRoot"}
+
+
+def test_called_gm_macro_names_scans_every_declared_program_not_just_the_first(tmp_path):
+    """A `%gm` name called only by the third of three declared programs must
+    still be found -- the pre-pass must not stop after `main_programs[0]`."""
+    first = tmp_path / "first.sas"
+    second = tmp_path / "second.sas"
+    third = tmp_path / "third.sas"
+    first.write_text("%gmFirst(a=1);\n", encoding="utf-8")
+    second.write_text("%gmSecond(a=1);\n", encoding="utf-8")
+    third.write_text("%gmThirdOnly(a=1);\n", encoding="utf-8")
+    config_result = ConfigResult(
+        status="SUCCESS",
+        main_programs=(first, second, third),
+        setup_file=None,
+        macro_roots=(),
+    )
+
+    names = _called_gm_macro_names(config_result)
+
+    assert names == {"gmFirst", "gmSecond", "gmThirdOnly"}
 
 
 def demo():

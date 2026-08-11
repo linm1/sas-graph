@@ -10,6 +10,7 @@ Exit codes: 0 success, 1 validation/run FAILED, 2 argparse usage error.
 """
 
 import argparse
+import dataclasses
 import shutil
 import sys
 from pathlib import Path
@@ -58,6 +59,54 @@ def _write_manifest(result):
         raise
 
 
+_STATUS_RANK = {"COMPLETE": 0, "PARTIAL": 1, "FAILED": 2}
+
+
+def _worst_status(statuses):
+    return max(statuses, key=lambda status: _STATUS_RANK[status])
+
+
+def _write_program_debug_artifact(config_result, index, program, run_id, run_dir):
+    """One independent re-parse of a single declared program (ticket 02).
+
+    Filtering the merged graph can't isolate one program's slice -- shared
+    dataset nodes carry no single owning file to filter by -- so this reuses
+    `run_pipeline.run` with `main_programs` narrowed to just this program.
+    No mermaid: it adds render cost without adding debugging value beyond the
+    merged diagram plus this findings.md. Own manifest per program (a forced
+    choice per the ticket, not left to `build_manifest`'s defaults).
+
+    The directory is keyed by index, not bare `program.name`: two declared
+    programs can share a basename from different directories (config.py has
+    no duplicate-basename check), and `program.name` alone would collide,
+    crashing `mkdir` and discarding the whole run.
+    """
+    narrowed = dataclasses.replace(config_result, main_programs=(program,))
+    program_dir = run_dir / "programs" / f"{index:03d}_{program.name}"
+    program_dir.mkdir(parents=True)
+
+    # Fresh snapshots dict, not the merged run's shared one: this parse only
+    # touches the files this one program's parse actually reads, so its
+    # manifest's sources describe only that program -- consistent with
+    # main_programs already describing only this one program, not all N.
+    # ponytail: a source edited between the merged parse and this debug parse
+    # won't raise SourceChangedDuringRunError since the two dicts never
+    # compare against each other; widen to a shared dict if that matters.
+    program_snapshots = {}
+    graph = run_pipeline(narrowed, run_id, program_snapshots)
+    graph_path = save_graph(graph, program_dir / "graph.json")
+    loaded = load_graph(graph_path)
+
+    (program_dir / "findings.md").write_text(render_findings(loaded), encoding="utf-8")
+
+    manifest = build_manifest(
+        narrowed, run_id=run_id, run_status=loaded["run_status"],
+        sources=program_snapshots, findings=loaded["findings"],
+    )
+    save_manifest(manifest, program_dir / "manifest.json")
+    return loaded["run_status"]
+
+
 def _discard_run_dir(run_dir, output_dir):
     """Remove only the exact reserved child after a failed publication."""
     run_dir = Path(run_dir).resolve()
@@ -75,7 +124,8 @@ def _validate(config_path):
 
     if result.ok:
         print(f"config {result.status}: {result.config_path}")
-        print(f"  main_program: {result.main_program}")
+        for main_program in result.main_programs:
+            print(f"  main_program: {main_program}")
         print(f"  setup_file:   {result.setup_file}")
         for root in result.allowed_roots:
             print(f"  allowed_root: {root}")
@@ -127,11 +177,21 @@ def _run(config_path):
             sources=snapshots, findings=loaded["findings"],
         )
         save_manifest(manifest, run_dir / "manifest.json")
+
+        program_statuses = [
+            _write_program_debug_artifact(result, index, program, run_id, run_dir)
+            for index, program in enumerate(result.main_programs)
+        ]
     except Exception:
         _discard_run_dir(run_dir, result.output_dir)
         raise
 
+    # Informational only -- the exit code below stays governed by the merged
+    # graph's own status, never by a per-program debug parse alone.
+    overall_status = _worst_status([loaded["run_status"], *program_statuses])
     print(f"run {loaded['run_status']}: {run_dir}")
+    if overall_status != loaded["run_status"]:
+        print(f"  overall (incl. per-program debug): {overall_status}")
     return 0 if loaded["run_status"] != "FAILED" else 1
 
 

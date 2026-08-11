@@ -66,15 +66,15 @@ def test_repo_fixture_validates_clean():
 
     assert result.status == "COMPLETE"
     assert result.findings == []
-    assert result.main_program.name == "adae.sas"
+    assert result.main_programs[0].name == "adae.sas"
     assert result.setup_file.name == "setup.sas"
 
 
 def test_relative_paths_resolve_against_the_config_file_not_the_cwd():
     result = load_config(FIXTURE)
 
-    assert result.main_program == (FIXTURE.parent / "adae.sas").resolve()
-    assert result.main_program.is_absolute()
+    assert result.main_programs[0] == (FIXTURE.parent / "adae.sas").resolve()
+    assert result.main_programs[0].is_absolute()
 
 
 # --- section 5.3 FAILED bullets -------------------------------------------
@@ -123,6 +123,67 @@ def test_single_element_list_setup_file_is_accepted():
         result = load_config(cfg)
 
     assert result.status == "COMPLETE"
+
+
+def test_main_program_list_validates_each_entry_independently():
+    """`main_program` accepts a list the same way `setup_file` already does
+    (`_as_single`), with the opposite cardinality rule: 1+ entries valid."""
+    text = GOOD_CONFIG.replace(
+        "main_program: adae.sas\n",
+        "main_program:\n  - adae.sas\n  - addv.sas\n  - adexsum.sas\n",
+    )
+    with project(text, files=("adae.sas", "addv.sas", "adexsum.sas", "setup.sas")) as cfg:
+        result = load_config(cfg)
+
+    assert result.status == "COMPLETE"
+    assert [p.name for p in result.main_programs] == ["adae.sas", "addv.sas", "adexsum.sas"]
+
+
+def test_main_program_list_with_three_broken_entries_reports_all_and_fails():
+    """One bad entry among N still fails the whole config (section 5.3), but
+    every entry's own problem is reported in the same pass, not just the
+    first. Each entry is broken a different way so a fail-fast implementation
+    that only checked one entry could not pass this by accident."""
+    text = GOOD_CONFIG.replace(
+        "main_program: adae.sas\n",
+        "main_program:\n  - missing.sas\n  - ../outside.sas\n  - prod.sas7bdat\n",
+    )
+    with project(text, files=("setup.sas",)) as cfg:
+        result = load_config(cfg)
+
+    assert result.status == "FAILED"
+    main_program_findings = [f for f in result.findings if f["object"] == "main_program"]
+    assert len(main_program_findings) == 3
+    messages = " ".join(f["message"] for f in main_program_findings)
+    assert "missing.sas" in messages
+    assert "outside.sas" in messages
+    assert "prod.sas7bdat" in messages
+    assert result.main_programs == ()
+
+
+def test_main_program_list_with_two_good_and_one_bad_entry_still_fails_whole_config():
+    """The literal 'one bad entry among N' shape (section 5.3): two entries
+    are individually valid, one is not. A partial pass -- main_programs
+    holding only the two valid entries while the config still reports
+    FAILED -- is exactly what this ticket forbids; the whole config must
+    fail, not just the bad entry."""
+    text = GOOD_CONFIG.replace(
+        "main_program: adae.sas\n",
+        "main_program:\n  - adae.sas\n  - addv.sas\n  - missing.sas\n",
+    )
+    with project(text, files=("adae.sas", "addv.sas", "setup.sas")) as cfg:
+        result = load_config(cfg)
+
+    # main_programs itself still holds the two entries that individually
+    # resolved -- config.py collects per-entry results before deciding the
+    # overall verdict -- but `status`/`ok` is what actually gates whether a
+    # run proceeds (cli.py never touches main_programs unless `result.ok`),
+    # so THAT is the "not a partial pass" guarantee this test locks down.
+    assert result.status == "FAILED"
+    assert result.ok is False
+    main_program_findings = [f for f in result.findings if f["object"] == "main_program"]
+    assert len(main_program_findings) == 1
+    assert "missing.sas" in main_program_findings[0]["message"]
 
 
 def test_main_program_outside_allowed_roots_fails():
@@ -237,7 +298,7 @@ def test_absent_macro_root_does_not_fail_the_run():
         result = load_config(cfg)
 
     assert result.status != "FAILED"
-    assert result.main_program is not None
+    assert result.main_programs
 
 
 def test_malformed_yaml_fails_rather_than_raising():
@@ -246,6 +307,47 @@ def test_malformed_yaml_fails_rather_than_raising():
 
     assert result.status == "FAILED"
     assert any("YAML" in f["message"] for f in result.findings)
+
+
+# --- os_fvars_base ----------------------------------------------------------
+
+
+def test_os_fvars_base_absent_is_complete_and_none():
+    with project() as cfg:
+        result = load_config(cfg)
+
+    assert result.status == "COMPLETE"
+    assert result.os_fvars_base is None
+
+
+def test_os_fvars_base_outside_allowed_roots_is_accepted():
+    """Never read from disk -- allowed_roots (the read boundary) does not apply."""
+    text = GOOD_CONFIG + "os_fvars_base: /synthetic/stats/\n"
+    with project(text) as cfg:
+        result = load_config(cfg)
+
+    assert result.status == "COMPLETE"
+    assert result.os_fvars_base == "/synthetic/stats/"
+
+
+def test_os_fvars_base_prohibited_artifact_is_blocked():
+    text = GOOD_CONFIG + "os_fvars_base: /synthetic/production/stats/\n"
+    with project(text) as cfg:
+        result = load_config(cfg)
+
+    assert result.status == "FAILED"
+    assert any("prohibited" in f["message"] for f in result.findings)
+    assert result.os_fvars_base is None
+
+
+def test_os_fvars_base_is_not_resolved_against_the_config_directory():
+    """A relative-looking value stays exactly as declared -- it is not a local path."""
+    text = GOOD_CONFIG + "os_fvars_base: relative/stats/\n"
+    with project(text) as cfg:
+        result = load_config(cfg)
+
+    assert result.status == "COMPLETE"
+    assert result.os_fvars_base == "relative/stats/"
 
 
 def test_missing_config_file_fails():

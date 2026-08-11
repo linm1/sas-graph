@@ -73,7 +73,7 @@ def build_manifest(
         ),
         "config": {
             "path": str(config.config_path) if config.config_path else None,
-            "main_program": str(config.main_program) if config.main_program else None,
+            "main_programs": [str(p) for p in config.main_programs],
             "setup_file": str(config.setup_file) if config.setup_file else None,
             "allowed_roots": [str(p) for p in config.allowed_roots],
             "macro_roots": [str(p) for p in config.macro_roots],

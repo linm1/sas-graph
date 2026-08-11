@@ -44,6 +44,24 @@ _INCLUDE_RE = re.compile(
 # one-`&` reference to `x`.
 _REF_RE = re.compile(r"(?<!&)&(?!&)([A-Za-z_][A-Za-z0-9_]*)\.?")
 
+# --- walk_runtime: %os_fvars binding + %IF/%symexist branch selection -------
+
+_OS_FVARS_RE = re.compile(r"^%os_fvars\s*\(\s*(.*?)\s*\)\s*;?$", re.IGNORECASE)
+_IF_THEN_DO_RE = re.compile(r"^%if\s+(.+?)\s*%then\s+%do\s*;?$", re.IGNORECASE)
+_ELSE_DO_RE = re.compile(r"^%else\s+%do\b", re.IGNORECASE)
+_DO_OPEN_RE = re.compile(r"^%do\b", re.IGNORECASE)
+# Depth counter for `%end;` matching -- `else` counts as an opener too, since
+# a nested `%if ... %do; ... %end; %else %do; ... %end;` needs its `%else`
+# half to open its own depth level, or the first `%end;` after it would look
+# like the outer block's close.
+_BLOCK_OPENER_RE = re.compile(r"^%(if|do|else)\b", re.IGNORECASE)
+_BLOCK_END_RE = re.compile(r"^%end\b", re.IGNORECASE)
+_SYMEXIST_RE = re.compile(r"^%symexist\s*\(\s*([A-Za-z_]\w*)\s*\)$", re.IGNORECASE)
+_IN_CONDITION_RE = re.compile(r"^(.+?)\s+in\s*\(\s*(.+?)\s*\)$", re.IGNORECASE)
+_COMPARISON_RE = re.compile(
+    r"^(?P<lhs>.+?)\s+(?P<op>\^=|~=|!=|=|eq|ne)\s+(?P<rhs>.+)$", re.IGNORECASE
+)
+
 
 @dataclass(frozen=True)
 class LetEvent:
@@ -108,6 +126,44 @@ def _runtime_creation_finding(kind, statement, message):
     }
 
 
+def _bind_statement(statement, events):
+    """One statement's `%let` / `CALL SYMPUTX` / `PROC SQL INTO:` handling.
+
+    Shared by `walk_let_statements` and `walk_runtime` so the two never drift
+    on this logic. Returns `(event_or_None, finding_or_None)`; `%put` and any
+    statement matching neither pattern return `(None, None)`.
+    """
+    text = statement.text
+
+    if _PUT_RE.match(text):
+        return None, None
+
+    match = _LET_RE.match(text)
+    if match:
+        name, raw_value = match.group(1), match.group(2)
+        value = resolve_text(raw_value.strip(), statement.statement_order, events)
+        event = LetEvent(
+            name, value, statement.statement_order, statement.as_source("let_statement")
+        )
+        return event, None
+
+    if _SYMPUTX_RE.search(text):
+        return None, _runtime_creation_finding(
+            "call_symputx",
+            statement,
+            "`CALL SYMPUTX` creates a macro variable at SAS runtime.",
+        )
+
+    if _SQL_INTO_RE.search(text):
+        return None, _runtime_creation_finding(
+            "proc_sql_into",
+            statement,
+            "`PROC SQL ... INTO :` creates a macro variable at SAS runtime.",
+        )
+
+    return None, None
+
+
 def walk_let_statements(statements, findings_only=False, initial_events=()):
     """Walk `statements` in order, collecting `%let` bindings (section 11.3).
 
@@ -123,43 +179,332 @@ def walk_let_statements(statements, findings_only=False, initial_events=()):
     findings = []
 
     for statement in statements:
-        text = statement.text
-
-        if _PUT_RE.match(text):
-            continue
-
-        match = _LET_RE.match(text)
-        if match:
-            name, raw_value = match.group(1), match.group(2)
-            value = resolve_text(raw_value, statement.statement_order, events)
-            event = LetEvent(
-                name, value, statement.statement_order, statement.as_source("let_statement")
-            )
+        event, finding = _bind_statement(statement, events)
+        if event is not None:
             events.append(event)
             local_events.append(event)
-            continue
-
-        if _SYMPUTX_RE.search(text):
-            findings.append(
-                _runtime_creation_finding(
-                    "call_symputx",
-                    statement,
-                    "`CALL SYMPUTX` creates a macro variable at SAS runtime.",
-                )
-            )
-            continue
-
-        if _SQL_INTO_RE.search(text):
-            findings.append(
-                _runtime_creation_finding(
-                    "proc_sql_into",
-                    statement,
-                    "`PROC SQL ... INTO :` creates a macro variable at SAS runtime.",
-                )
-            )
-            continue
+        if finding is not None:
+            findings.append(finding)
 
     return findings if findings_only else local_events
+
+
+def _parse_os_fvars_params(raw):
+    """`mvar=X, projpath=Y` -> `{"mvar": "X", "projpath": "Y"}`, lower-keyed."""
+    params = {}
+    for part in raw.split(","):
+        key, sep, value = part.partition("=")
+        if sep:
+            params[key.strip().lower()] = value.strip()
+    return params
+
+
+def _os_fvars_finding(statement, message):
+    return {
+        "id": f"finding:macro_state:{statement.statement_order:04d}:os_fvars_unbound",
+        "status": "NOT_EXECUTED",
+        "type": "os_fvars_unbound",
+        "severity": "INFORMATION",
+        "object": statement.file,
+        "message": message,
+        "suggested_action": (
+            "This value cannot be resolved statically and is not used to "
+            "resolve later macro references."
+        ),
+        "affected_nodes": [],
+        "affected_edges": [],
+        "source": statement.as_source("os_fvars_unbound"),
+    }
+
+
+def _bind_os_fvars(statement, events, os_fvars_base):
+    """`%os_fvars(mvar=X, projpath=P)` -> a `LetEvent` for `X` (map decision 4).
+
+    Composition, in order: resolve `projpath` against `events`; `:` -> `/`;
+    concatenate onto `os_fvars_base` (a declared prefix, not path-joined --
+    the declared base already ends in `/`); collapse to exactly one trailing
+    `/`. `os_fvars_base=None` means `%os_fvars` binds nothing anywhere, with
+    no finding either -- identical to today's behavior (spec decision 9).
+    """
+    match = _OS_FVARS_RE.match(statement.text)
+    if match is None:
+        return None, None
+    if os_fvars_base is None:
+        return None, None
+
+    params = _parse_os_fvars_params(match.group(1))
+    missing = [key for key in ("mvar", "projpath") if not params.get(key)]
+    if missing:
+        names = ", ".join(f"`{key}=`" for key in missing)
+        return None, _os_fvars_finding(
+            statement, f"`%os_fvars` call is missing {names} and cannot be bound."
+        )
+
+    resolved, unresolved = resolve_text(
+        params["projpath"], statement.statement_order, events, return_unresolved=True
+    )
+    if unresolved:
+        return None, _os_fvars_finding(
+            statement,
+            "`%os_fvars` projpath references unresolved macro variable(s): "
+            + ", ".join(unresolved) + ".",
+        )
+
+    value = (os_fvars_base + resolved.replace(":", "/")).rstrip("/") + "/"
+    event = LetEvent(
+        params["mvar"], value, statement.statement_order,
+        statement.as_source("os_fvars_statement"),
+    )
+    return event, None
+
+
+def _is_bound(name, statement_order, events):
+    """`%symexist(name)` -- true iff visible as of `statement_order` (< only)."""
+    return any(
+        event.statement_order < statement_order and event.name.lower() == name.lower()
+        for event in events
+    )
+
+
+def _evaluate_simple_condition(text, statement_order, events):
+    """One operand: `%symexist(x)`, `lhs in (v1 v2)`, or `lhs op rhs`.
+
+    Returns True/False, or None when the operand cannot be decided (an
+    unsupported form, or an operand that resolve_text leaves unresolved) --
+    None always means "never guess", per the dev plan's own MVP principle.
+    """
+    match = _SYMEXIST_RE.match(text)
+    if match:
+        return _is_bound(match.group(1), statement_order, events)
+
+    match = _IN_CONDITION_RE.match(text)
+    if match:
+        lhs, unresolved = resolve_text(
+            match.group(1).strip(), statement_order, events, return_unresolved=True
+        )
+        if unresolved:
+            return None
+        members = {member.strip().lower() for member in match.group(2).split()}
+        return lhs.strip().lower() in members
+
+    match = _COMPARISON_RE.match(text)
+    if match:
+        lhs, lhs_unresolved = resolve_text(
+            match.group("lhs").strip(), statement_order, events, return_unresolved=True
+        )
+        rhs, rhs_unresolved = resolve_text(
+            match.group("rhs").strip(), statement_order, events, return_unresolved=True
+        )
+        if lhs_unresolved or rhs_unresolved:
+            return None
+        equal = lhs.strip().lower() == rhs.strip().lower()
+        return equal if match.group("op").lower() in ("=", "eq") else not equal
+
+    return None
+
+
+def _evaluate_condition(condition_text, statement_order, events):
+    """Full `%IF` condition: a top-level `or` chain of simple operands.
+
+    A top-level `and`, or anything else unsupported, is unresolvable (never
+    guessed). For `or`: any true operand wins regardless of the rest; with no
+    true operand, the result is False only if every operand resolved (to
+    False) -- one unresolved operand among all-False siblings still makes the
+    whole chain unresolvable, since SAS itself would still need that operand
+    to decide.
+    """
+    text = condition_text.strip()
+    if re.search(r"\band\b", text, re.IGNORECASE):
+        return None
+
+    operands = re.split(r"\s+or\s+", text, flags=re.IGNORECASE)
+    results = [
+        _evaluate_simple_condition(operand.strip(), statement_order, events)
+        for operand in operands
+    ]
+    if any(result is True for result in results):
+        return True
+    if all(result is False for result in results):
+        return False
+    return None
+
+
+def _classify_opener(text):
+    """`%IF ... %THEN %DO;` / `%ELSE %DO;` / any other `%DO` -- or neither."""
+    match = _IF_THEN_DO_RE.match(text)
+    if match:
+        return "if", match.group(1)
+    if _ELSE_DO_RE.match(text):
+        return "else", None
+    if _DO_OPEN_RE.match(text):
+        return "do", None
+    return None, None
+
+
+def _find_block_end(statements, start_index):
+    """Index of the `%end;` matching the opener at `start_index`, depth-counted."""
+    depth = 1
+    for index in range(start_index + 1, len(statements)):
+        text = statements[index].text
+        if _BLOCK_OPENER_RE.match(text):
+            depth += 1
+        elif _BLOCK_END_RE.match(text):
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _span_finding(kind, status, first, last, message, suggested_action):
+    return {
+        "id": f"finding:macro_state:{first.statement_order:04d}:{kind}",
+        "status": status,
+        "type": kind,
+        "severity": "INFORMATION",
+        "object": first.file,
+        "message": message,
+        "suggested_action": suggested_action,
+        "affected_nodes": [],
+        "affected_edges": [],
+        "source": {
+            "file": first.file,
+            "line_start": first.line_start,
+            "line_end": last.line_end,
+            "statement_order": first.statement_order,
+            "original_text": first.original_text,
+            "rule": kind,
+        },
+    }
+
+
+def _skipped_branch_finding(first, last, description):
+    return _span_finding(
+        "macro_branch_not_taken",
+        "NOT_EXECUTED",
+        first,
+        last,
+        f"Branch not taken: `{description}` was not selected for the "
+        "declared context; its statements were not processed.",
+        "Review the branch manually if it was expected to run.",
+    )
+
+
+def _unresolved_condition_finding(statement, description):
+    return _span_finding(
+        "macro_condition_unresolved",
+        "NOT_EXECUTED",
+        statement,
+        statement,
+        f"Macro condition could not be resolved statically: `{description}`. "
+        "Its body was processed as evidence, not as a confirmed branch.",
+        "Review branches manually; static resolution is out of scope.",
+    )
+
+
+def _walk(statements, events, findings, surviving, skipped_orders, os_fvars_base):
+    """Interleaved branch selection + binding over one flat statement list.
+
+    Recurses into a taken (or unresolvable-and-therefore-kept) body so nested
+    `%IF`s see the events bound by their own enclosing branch; an untaken
+    body is never recursed into -- `_find_block_end`'s depth counter already
+    resolved its full span, so every order in it is skipped in one pass,
+    with no chance of its own `%os_fvars`/`%let` calls leaking a binding.
+    """
+    index = 0
+    length = len(statements)
+    while index < length:
+        statement = statements[index]
+        kind, condition_text = _classify_opener(statement.text)
+
+        if kind is None:
+            if _OS_FVARS_RE.match(statement.text):
+                event, finding = _bind_os_fvars(statement, events, os_fvars_base)
+                if event is not None:
+                    events.append(event)
+                if finding is not None:
+                    findings.append(finding)
+                index += 1
+                continue
+
+            event, finding = _bind_statement(statement, events)
+            if event is not None:
+                events.append(event)
+            if finding is not None:
+                findings.append(finding)
+            surviving.append(statement)
+            index += 1
+            continue
+
+        end_index = _find_block_end(statements, index)
+        if end_index is None:
+            # No matching %end in this stream -- keep the opener as evidence
+            # rather than guess a boundary; never seen in practice.
+            surviving.append(statement)
+            index += 1
+            continue
+
+        body = statements[index + 1:end_index]
+        decision = (
+            _evaluate_condition(condition_text, statement.statement_order, events)
+            if kind == "if" else None
+        )
+
+        else_start = end_index + 1
+        else_end = None
+        if kind == "if" and else_start < length and _ELSE_DO_RE.match(
+            statements[else_start].text
+        ):
+            else_end = _find_block_end(statements, else_start)
+
+        if decision is True:
+            _walk(body, events, findings, surviving, skipped_orders, os_fvars_base)
+            if else_end is not None:
+                else_span = statements[else_start:else_end + 1]
+                skipped_orders.update(s.statement_order for s in else_span)
+                findings.append(_skipped_branch_finding(
+                    else_span[0], else_span[-1], f"%else (complement of `{condition_text}`)"
+                ))
+                index = else_end + 1
+            else:
+                index = end_index + 1
+        elif decision is False:
+            span = statements[index:end_index + 1]
+            skipped_orders.update(s.statement_order for s in span)
+            findings.append(_skipped_branch_finding(span[0], span[-1], condition_text))
+            if else_end is not None:
+                _walk(
+                    statements[else_start + 1:else_end], events, findings, surviving,
+                    skipped_orders, os_fvars_base,
+                )
+                index = else_end + 1
+            else:
+                index = end_index + 1
+        else:
+            description = condition_text if condition_text is not None else statement.text
+            findings.append(_unresolved_condition_finding(statement, description))
+            _walk(body, events, findings, surviving, skipped_orders, os_fvars_base)
+            index = end_index + 1
+
+
+def walk_runtime(statements, initial_events=(), os_fvars_base=None):
+    """Interleaved `%os_fvars` binding + `%IF`/`%symexist` branch selection.
+
+    Unlike `walk_let_statements`, this also decides which statements survive:
+    an untaken `%IF`/`%ELSE` branch's statements never reach the returned
+    `surviving_statements`, so a `LIBNAME` or macro call inside it never
+    fires downstream. `events` is the full visible table (`initial_events`
+    plus everything bound while walking), ready to hand to `resolve_text`
+    elsewhere. `skipped_orders` is every `statement_order` dropped by branch
+    selection -- the caller needs the set itself (not spans) to filter
+    comments, since a comment's `after_statement_order` is a flat position
+    marker, not a range (map decision 6).
+    """
+    events = list(initial_events)
+    findings = []
+    surviving = []
+    skipped_orders = set()
+    _walk(list(statements), events, findings, surviving, skipped_orders, os_fvars_base)
+    return surviving, events, findings, skipped_orders
 
 
 def _include_finding(kind, statement, message, raw_path):

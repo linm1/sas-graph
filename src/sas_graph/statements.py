@@ -20,17 +20,38 @@ Three SAS-specific traps shape the code:
   active has been seen since the last `;`.
 - **Quotes escape by doubling.** `"it""s"` is one string. Treating the second `"`
   as a close would put the tail of the file into string state.
+- **A bare macro call can end a statement without a `;`.** SAS's macro
+  processor invokes `%name(...)` the moment its parens balance; the trailing
+  `;` some authors add is a convention, not a requirement, for a call used on
+  its own (as opposed to embedded inside a larger statement, e.g.
+  `%let x = %sysfunc(y) + 1;`, which must keep accumulating). A `%name(`
+  starting where a statement could start (mirroring the `*`-comment rule
+  above) is tracked to its balanced close; if what follows is another
+  `%`-led token or end of file, the call is emitted as its own statement
+  right there. Real evidence: every study bootstrap file this parser targets
+  writes `%os_fvars(mvar=X, projpath=Y)` with no trailing `;`, several in a
+  row, sometimes immediately followed by `%end;` -- without this rule those
+  merge into one unparseable blob and corrupt every `%end;` match after it.
 
 Section 11.6: commented code is inactive evidence. It is returned separately and
 never becomes a statement, so no later phase can accidentally read a dependency
 out of disabled code.
 """
 
+import re
 from dataclasses import dataclass, field
 
 # `%*` before `*` matters: a macro comment must not be read as a bare star
 # comment that happens to follow a `%`.
 _MACRO_STAR = "%*"
+
+# A macro CALL's name is immediately followed by `(`, no space -- `%macro
+# name (params);`'s own `%macro` never matches this (there is a keyword and a
+# space before the name), so a definition header is never mistaken for a
+# bare call. Checked against every fixture .sas file: zero reserved macro
+# keyword (%macro/%mend/%do/%if/%then/%else/%end/%let/%put/%include/%global/
+# %local) is ever immediately followed by `(`.
+_BARE_MACRO_CALL_START_RE = re.compile(r"%[A-Za-z_]\w*\(")
 
 
 @dataclass(frozen=True)
@@ -241,6 +262,17 @@ class _Scanner:
                     return self.result()
                 continue
 
+            # A bare macro call can only be recognized where a statement
+            # could start, same precondition as the comment check above.
+            if (
+                not self.has_active
+                and char == "%"
+                and _BARE_MACRO_CALL_START_RE.match(text, self.pos)
+            ):
+                if not self._scan_bare_macro_call():
+                    return self.result()
+                continue
+
             if char == ";":
                 self.pos += 1
                 self.emit_statement(self.pos, terminated=True)
@@ -298,6 +330,62 @@ class _Scanner:
         self.comment_spans.append((start, end))
         self.pos = end
         self.start = end
+        return True
+
+    def _scan_bare_macro_call(self):
+        """Track a `%name(...)` candidate to its balanced close.
+
+        `has_active` is set immediately (the `%` itself is the statement's
+        first active character, same as any other non-space char). Depth
+        counting reuses `_skip_block_comment`/`_skip_string` for anything
+        found inside the parens -- a quoted arg like `"a)b"` or an embedded
+        `/* note */` must not desync the count, the same requirement the
+        outer scan already has for '(' outside a macro call.
+
+        Only closes the statement here when the balanced-close is followed
+        by another `%`-led token or end of file: that is the one case SAS
+        itself treats the call as already complete without needing a `;`.
+        Anything else after the close (an operator, `&ref`, plain text)
+        means this call was embedded in a larger statement, so nothing is
+        emitted and normal scanning continues from the closing paren
+        exactly as it did before this method existed.
+        """
+        self.has_active = True
+        depth = 0
+        closed = False
+        while self.pos < len(self.text):
+            char = self.text[self.pos]
+            if self.at("/*"):
+                if not self._skip_block_comment():
+                    return False
+                continue
+            if char in "\"'":
+                if not self._skip_string(char):
+                    return False
+                continue
+            if char == "(":
+                depth += 1
+                self.pos += 1
+                continue
+            if char == ")":
+                depth -= 1
+                self.pos += 1
+                if depth == 0:
+                    closed = True
+                    break
+                continue
+            self.pos += 1
+
+        if not closed:
+            # Ran off the end of the file with parens still open -- not a
+            # complete call. `run()`'s own end-of-file handling reports the
+            # truncation, same as any other unterminated construct; nothing
+            # extra to do here.
+            return True
+
+        rest = self.text[self.pos :].lstrip()
+        if rest == "" or rest.startswith("%"):
+            self.emit_statement(self.pos, terminated=True)
         return True
 
     def _skip_string(self, quote):

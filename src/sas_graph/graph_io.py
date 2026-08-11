@@ -7,7 +7,7 @@ take the reloaded dict and never touch an in-memory graph object.
 import json
 from pathlib import Path
 
-SUPPORTED_SCHEMA_VERSIONS = {"0.1.0"}
+SUPPORTED_SCHEMA_VERSIONS = {"0.2.0"}
 
 
 def load_graph(path):

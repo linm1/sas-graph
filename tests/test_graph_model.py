@@ -8,7 +8,7 @@ from sas_graph.graph_model import GraphContext, normalize_dataset
 
 
 def make_context():
-    return GraphContext(main_program="adae.sas", setup_file="setup.sas", run_id="run-0001")
+    return GraphContext(main_programs=["adae.sas"], setup_file="setup.sas", run_id="run-0001")
 
 
 def test_normalize_dataset_splits_libref_and_member():
@@ -105,9 +105,9 @@ def test_to_graph_matches_the_frozen_envelope_shape():
     ctx.add_dataset("sdtm.ae")
     graph = ctx.to_graph()
 
-    assert graph["schema_version"] == "0.1.0"
+    assert graph["schema_version"] == "0.2.0"
     assert graph["run_id"] == "run-0001"
-    assert graph["main_program"] == "adae.sas"
+    assert graph["main_programs"] == ["adae.sas"]
     assert graph["setup_file"] == "setup.sas"
     assert graph["run_status"] == "COMPLETE"
     assert isinstance(graph["nodes"], list)

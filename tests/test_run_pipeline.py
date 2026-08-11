@@ -8,11 +8,12 @@ byte-comparable; this test instead proves the *shape* (node/edge types, run
 status, finding statuses) and that both renderers accept the generated graph.
 """
 
+import shutil
+import json
 import tempfile
 from pathlib import Path
 
 import conftest  # noqa: F401
-import pytest
 
 from sas_graph.config import load_config
 from sas_graph.cli import _run
@@ -30,6 +31,29 @@ def _write_project(tmp_path, setup_text, main_text, extra_config=""):
     config = tmp_path / "project.yaml"
     config.write_text(
         "main_program: main.sas\n"
+        "setup_file: setup.sas\n"
+        "allowed_roots:\n"
+        "  - .\n"
+        "output_dir: graph_runs\n"
+        + extra_config,
+        encoding="utf-8",
+    )
+    result = load_config(config)
+    assert result.ok
+    return result
+
+
+def _write_multi_program_project(tmp_path, setup_text, programs, extra_config=""):
+    """Like `_write_project`, but `programs` is `{filename: text}` for N
+    declared main programs, written as a YAML list under `main_program:` in
+    insertion order."""
+    (tmp_path / "setup.sas").write_text(setup_text, encoding="utf-8")
+    for name, text in programs.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    program_list = "".join(f"  - {name}\n" for name in programs)
+    config = tmp_path / "project.yaml"
+    config.write_text(
+        f"main_program:\n{program_list}"
         "setup_file: setup.sas\n"
         "allowed_roots:\n"
         "  - .\n"
@@ -997,6 +1021,173 @@ def test_setup_macro_variable_preserves_defining_let_source(tmp_path):
     }
 
 
+def test_n_programs_produce_distinct_program_and_macrovariable_nodes(tmp_path):
+    """Ticket 01 acceptance: 3 distinct Program nodes and 3 distinct,
+    program-scoped macro-variable nodes for a same-named %let, each carrying
+    its own value -- never one collapsed node."""
+    result = _write_multi_program_project(
+        tmp_path,
+        "",
+        {
+            "prog_a.sas": "%let domain = ADAE;\ndata work.a;\nset sdtm.ae;\nrun;\n",
+            "prog_b.sas": "%let domain = ADDV;\ndata work.b;\nset sdtm.dv;\nrun;\n",
+            "prog_c.sas": "%let domain = ADEXSUM;\ndata work.c;\nset sdtm.ex;\nrun;\n",
+        },
+    )
+
+    graph = run(result, run_id="n-programs")
+
+    program_nodes = [n for n in graph["nodes"] if n["type"] == "Program"]
+    assert {n["label"] for n in program_nodes} == {"prog_a.sas", "prog_b.sas", "prog_c.sas"}
+    assert len(program_nodes) == 3
+
+    domain_vars = {
+        n["id"]: n["value"]
+        for n in graph["nodes"]
+        if n["type"] == "MacroVariable" and n["label"] == "domain"
+    }
+    assert domain_vars == {
+        "macrovar:000_prog_a.sas:domain@1": "ADAE",
+        "macrovar:001_prog_b.sas:domain@1": "ADDV",
+        "macrovar:002_prog_c.sas:domain@1": "ADEXSUM",
+    }
+
+
+def test_two_programs_sharing_a_basename_get_distinct_graph_nodes(tmp_path):
+    """Regression: `a/adae.sas` and `b/adae.sas` used to collapse into one
+    `program:adae.sas` node (and one `macrovar:adae.sas:...` node) because
+    the graph ids were keyed by bare basename -- the second program's %let
+    silently vanished via add_node's generic id-based dedup, with no crash
+    and no finding. Ids are now qualified by declaration index."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    (tmp_path / "a" / "adae.sas").write_text(
+        "%let d = A;\ndata work.a;\nset sdtm.ae;\nrun;\n", encoding="utf-8",
+    )
+    (tmp_path / "b" / "adae.sas").write_text(
+        "%let d = B;\ndata work.b;\nset sdtm.ae;\nrun;\n", encoding="utf-8",
+    )
+    (tmp_path / "setup.sas").write_text("", encoding="utf-8")
+    config = tmp_path / "project.yaml"
+    config.write_text(
+        "main_program:\n  - a/adae.sas\n  - b/adae.sas\n"
+        "setup_file: setup.sas\n"
+        "allowed_roots:\n  - .\n"
+        "output_dir: graph_runs\n",
+        encoding="utf-8",
+    )
+    result = load_config(config)
+    assert result.ok
+
+    graph = run(result, run_id="same-basename")
+
+    program_nodes = [n for n in graph["nodes"] if n["type"] == "Program"]
+    assert len(program_nodes) == 2
+    assert {n["id"] for n in program_nodes} == {"program:000_adae.sas", "program:001_adae.sas"}
+
+    d_vars = {
+        n["id"]: n["value"]
+        for n in graph["nodes"]
+        if n["type"] == "MacroVariable" and n["label"] == "d"
+    }
+    assert d_vars == {
+        "macrovar:000_adae.sas:d@1": "A",
+        "macrovar:001_adae.sas:d@1": "B",
+    }
+
+
+def test_gm_macro_called_only_by_third_program_resolves_through_contract(tmp_path):
+    """Ticket 01 acceptance: a %gm...-prefixed macro called only by the third
+    declared program still resolves through its .md contract in the merged
+    graph -- the lazy-contract pre-pass must scan every declared program, not
+    just the first."""
+    contracts = tmp_path / "contracts"
+    contracts.mkdir()
+    (contracts / "gm_only_third.md").write_text(
+        "# gm_only_third\n\n## Purpose\n\nDerives a dataset.\n\n## Parameters\n\n"
+        "| Parameter | Description | Acceptable Values | Default Value |\n"
+        "|---|---|---|---|\n"
+        "| inds | Input. | LIBRARY.DATASET | REQUIRED |\n"
+        "| outds | Output. | LIBRARY.DATASET | REQUIRED |\n",
+        encoding="utf-8",
+    )
+    result = _write_multi_program_project(
+        tmp_path,
+        "",
+        {
+            "prog_a.sas": "data work.a;\nset sdtm.ae;\nrun;\n",
+            "prog_b.sas": "data work.b;\nset sdtm.dv;\nrun;\n",
+            "prog_c.sas": "%gm_only_third(inds=sdtm.ex, outds=work.c_out);\n",
+        },
+        "macro_contracts:\n  - contracts\n",
+    )
+
+    graph = run(result, run_id="third-program-contract")
+
+    assert any(
+        n["type"] == "MacroContract" and n["label"] == "gm_only_third"
+        for n in graph["nodes"]
+    )
+    assert any(f["type"] == "macro_contract_matched" for f in graph["findings"])
+
+
+def test_sort_evidence_does_not_leak_between_programs(tmp_path):
+    """Ticket 01 acceptance: sort_by_at/sort_by_of isolation across programs
+    is a behavioral test, not an emptiness check. Program A sorts
+    `adam.adsl` by `usubjid`, then merges it by a mismatched `aeseq` --
+    that merge must still fire the prefix-mismatch finding (positive
+    control: the mechanism itself still works). Program B merges the same
+    `adam.adsl` by `aeseq` with no sort of its own -- if program A's sort
+    evidence leaked into program B's parse, the same mismatch would
+    incorrectly fire there too; isolation means it must not."""
+    result = _write_multi_program_project(
+        tmp_path,
+        "",
+        {
+            "prog_a.sas": (
+                "proc sort data=adam.adsl;\nby usubjid;\nrun;\n"
+                "data work.a_out;\nmerge adam.adsl;\nby aeseq;\nrun;\n"
+            ),
+            "prog_b.sas": (
+                "data work.b_out;\nmerge adam.adsl;\nby aeseq;\nrun;\n"
+            ),
+        },
+    )
+
+    graph = run(result, run_id="sort-isolation")
+
+    mismatches = [f for f in graph["findings"] if f["type"] == "merge_by_not_prefix_of_sort_by"]
+    assert len(mismatches) == 1
+    assert mismatches[0]["source"]["file"] == "prog_a.sas"
+
+
+def test_main_program_rebinding_a_setup_value_is_an_information_finding(tmp_path):
+    """Ticket 01 acceptance: a program rebinding a value setup.sas already
+    declared gets a plainly-informational finding, not an error and not
+    silence. A same-value rebind is not a divergence and gets no finding."""
+    result = _write_multi_program_project(
+        tmp_path,
+        "%let domain = SETUPVAL;\n",
+        {
+            "prog_a.sas": "%let domain = PROGVAL;\ndata work.a;\nset sdtm.ae;\nrun;\n",
+            "prog_b.sas": "%let domain = SETUPVAL;\ndata work.b;\nset sdtm.ae;\nrun;\n",
+        },
+    )
+
+    graph = run(result, run_id="setup-rebind")
+
+    rebinds = [
+        f for f in graph["findings"] if f["type"] == "main_program_rebinds_setup_macro_variable"
+    ]
+    assert len(rebinds) == 1
+    assert rebinds[0]["status"] == "SUPPORTED"
+    assert rebinds[0]["severity"] == "INFORMATION"
+    assert rebinds[0]["source"]["file"] == "prog_a.sas"
+    assert "PROGVAL" in rebinds[0]["message"]
+    assert "SETUPVAL" in rebinds[0]["message"]
+    assert graph["run_status"] != "FAILED"
+
+
 def test_same_named_included_files_keep_distinct_macro_call_and_parameter_nodes(tmp_path):
     (tmp_path / "left").mkdir()
     (tmp_path / "right").mkdir()
@@ -1219,8 +1410,7 @@ def test_inline_macro_defined_earlier_in_main_program_resolves_local_call(tmp_pa
     }
     # A macro defined and called inline in the same main-program file must
     # not be modeled twice -- no separate MacroSourceFile node duplicating
-    # the Program node that already represents this file (codex: qc_adae.sas
-    # was appearing as its own MacroSourceFile).
+    # the Program node that already represents this file.
     program_id = next(n["id"] for n in graph["nodes"] if n["type"] == "Program")
     assert not any(n["type"] == "MacroSourceFile" for n in graph["nodes"])
     assert ("defined_in", definition_id, program_id) in {
@@ -1267,9 +1457,11 @@ def test_bare_call_without_parens_resolves_inline_definition(tmp_path):
 
 
 def test_whole_file_macro_wrapper_reports_a_finding_instead_of_total_silence(tmp_path):
-    """B3: a setup file wholly wrapped in one %macro...%mend and invoked by a
-    bare call must not contribute zero evidence with zero explanation -- at
-    minimum, a finding must say the body was not bound."""
+    """B3, updated by setup-bootstrap-resolution: a setup file wholly wrapped
+    in one %macro...%mend and invoked by a bare call is now unwrapped -- its
+    body becomes real evidence (a Library node here) instead of the old
+    control-flow-rejection silence, and the unwrap itself is recorded by a
+    dedicated finding rather than the old template-rejection one."""
     result = _write_project(
         tmp_path,
         "%macro setup / minoperator;\nlibname x \"/tmp/x\";\n%mend setup;\n%setup;\n",
@@ -1278,9 +1470,9 @@ def test_whole_file_macro_wrapper_reports_a_finding_instead_of_total_silence(tmp
 
     graph = run(result, run_id="whole-file-macro-wrapper")
 
-    assert not any(n["type"] == "Library" for n in graph["nodes"])
+    assert any(n["type"] == "Library" and n["id"] == "library:x" for n in graph["nodes"])
     assert any(
-        f["type"] == "macro_source_template_not_executed" for f in graph["findings"]
+        f["type"] == "setup_macro_wrapper_unwrapped" for f in graph["findings"]
     )
 
 
@@ -1446,20 +1638,6 @@ def test_macro_roots_overlapping_main_program_directory_does_not_conflict(tmp_pa
     assert len([n for n in graph["nodes"] if n["type"] == "MacroDefinition"]) == 1
 
 
-QC_ADAE_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "qc_adae" / "project.yaml"
-# qc_adae is a real, anonymized client SAS program excluded from the public
-# repo (non-negotiable, see staging manifest). Skip the tests that depend on
-# it rather than failing when the fixture directory is absent.
-_QC_ADAE_AVAILABLE = QC_ADAE_FIXTURE.exists()
-_QC_ADAE_SKIP_REASON = "tests/fixtures/qc_adae/ excluded from the public repo"
-
-
-def _run_qc_adae():
-    result = load_config(QC_ADAE_FIXTURE)
-    assert result.ok
-    return run(result, run_id="proc-import-e2e")
-
-
 def test_proc_import_block_dispatches_through_apply_block(tmp_path):
     """External-file-sources ticket 02: confirms the dispatch wiring from
     ticket 01 actually fires through `run_pipeline.run` (not just
@@ -1541,71 +1719,267 @@ def test_proc_import_unresolved_datafile_produces_warning_severity_end_to_end(tm
     assert graph["run_status"] == "PARTIAL"
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_qc_adae_direct_call_sites_produce_external_file_evidence():
-    """Ticket 02's own fixture claim: tests/fixtures/qc_adae/qc_adae.sas lines
-    141/165/246/415 sit at the top level and dispatch directly through
-    `apply_block`. The macro-wrapped call sites are asserted separately by
-    ticket 03's test below.
+def test_dataset_read_but_never_written_gets_a_uniform_supported_finding():
+    """Ticket 03: a dataset read but never written by any parsed program gets
+    a uniform, non-degrading finding -- no exception for SDTM raw inputs, no
+    scoping by library name. `sdtm.ae` and `adam.adsl` are two different
+    libraries, both read-only in this fixture, and both must fire the same
+    way. `work.adae_pre` is read (by the PROC SORT) and written (by the DATA
+    step), so it must not fire."""
+    graph = _build_graph()
 
-    setup.sas:389 is a 6th PROC IMPORT call site in the fixture, but its own
-    call path through `%setup` is independently rejected by control-flow --
-    per ticket 02, the suite must not expect a passing case from it."""
-    if not _QC_ADAE_AVAILABLE:
-        return
-    graph = _run_qc_adae()
-
-    edges = [
-        e for e in graph["edges"]
-        if e["type"] == "reads_external_file" and not e.get("template_derived")
-    ]
-    call_site_lines = {e["source"]["line_start"] for e in edges}
-    assert call_site_lines == {141, 165, 246, 415}
-
-    external_file_ids = {n["id"] for n in graph["nodes"] if n["type"] == "ExternalFile"}
-    assert external_file_ids == {
-        "externalfile:&_rawxls.SMQ_spreadsheet_&_smqversion._English.xlsx",
-        "externalfile:&_rawxls.FMQ MedDRA Preferred Terms_Current Version_&_fmqversion..xlsx",
-        "externalfile:&_rawxls.FMQ MedDRA Preferred Terms_Current Version_28_Mar2025.xlsx",
+    dangling = {
+        f["object"]: f for f in graph["findings"] if f["type"] == "dataset_read_never_written"
     }
-
-    write_targets = {e["to"] for e in edges}
-    assert write_targets == {
-        "dataset:work.smq_aptc_raw0",
-        "dataset:work.smq_ptcounts_raw",
-        "dataset:work.smq_hier_raw",
-        "dataset:work._fmq_hepatic_raw",
-    }
+    assert {"sdtm.ae", "adam.adsl"} <= set(dangling)
+    assert all(
+        (f["status"], f["severity"]) == ("SUPPORTED", "INFORMATION") for f in dangling.values()
+    )
+    assert "work.adae_pre" not in dangling
 
 
-@pytest.mark.skipif(not _QC_ADAE_AVAILABLE, reason=_QC_ADAE_SKIP_REASON)
-def test_qc_adae_macro_wrapped_proc_import_is_reported_not_silent():
-    """Ticket 03: the PROC IMPORT at line 382 binds once per macro call."""
-    if not _QC_ADAE_AVAILABLE:
-        return
-    graph = _run_qc_adae()
+def test_read_only_dataset_finding_does_not_degrade_an_otherwise_complete_run(tmp_path):
+    result = _write_project(tmp_path, "", "data work.out;\nset sdtm.ae;\nrun;\n")
 
-    calls = [
-        f for f in graph["findings"]
-        if f["type"] == "macro_source_template_not_executed" and f["object"] == "fmq_import_2col"
-    ]
-    assert not calls
-    edges = [
-        e for e in graph["edges"]
-        if e["type"] == "reads_external_file" and e["source"]["line_start"] == 382
-    ]
-    assert len(edges) == 3
-    assert {e["call_source"]["line_start"] for e in edges} == {403, 404, 405}
-    assert {e["to"] for e in edges} == {
-        "dataset:work._fmq_fmq_hypo_raw",
-        "dataset:work._fmq_fmq_hyper_raw",
-        "dataset:work._fmq_fmq_dka_raw",
-    }
-    assert all(e["template_derived"] for e in edges)
-    assert any(
-        f["type"] == "macro_control_flow_not_executed" and f["object"] == "setup"
+    graph = run(result, run_id="dangling-read-complete")
+
+    finding = next(f for f in graph["findings"] if f["type"] == "dataset_read_never_written")
+    assert (finding["status"], finding["severity"]) == ("SUPPORTED", "INFORMATION")
+    assert finding["object"] == "sdtm.ae"
+    assert graph["run_status"] == "COMPLETE"
+    assert not any(
+        f["type"] == "dataset_read_never_written" and f["object"] == "work.out"
         for f in graph["findings"]
     )
+
+
+def test_dangling_read_finding_fires_across_a_merged_multi_program_graph(tmp_path):
+    """Ticket 03's own follow-up: once ticket 01's N-program merge exists,
+    confirm the same finding still fires over the final merged node/edge
+    set -- no reimplementation needed. `work.a` is written by prog_a and
+    read by prog_b, so it must not fire even though the read and write live
+    in different files; `sdtm.raw` is read only and must."""
+    result = _write_multi_program_project(
+        tmp_path,
+        "",
+        {
+            "prog_a.sas": "data work.a;\nset sdtm.raw;\nrun;\n",
+            "prog_b.sas": "data work.b;\nset work.a;\nrun;\n",
+        },
+    )
+
+    graph = run(result, run_id="dangling-merged")
+
+    dangling = {
+        f["object"] for f in graph["findings"] if f["type"] == "dataset_read_never_written"
+    }
+    assert dangling == {"sdtm.raw"}
+
+
+SYNTHETIC_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "synthetic_multi_program" / "project.yaml"
+)
+
+
+def _run_synthetic():
+    result = load_config(SYNTHETIC_FIXTURE)
+    assert result.ok
+    return run(result, run_id="synthetic-multi-program")
+
+
+def _findings_of(graph, finding_type):
+    return [f for f in graph["findings"] if f["type"] == finding_type]
+
+
+def test_synthetic_fixture_merges_declared_programs_into_one_indexed_graph():
+    """The multi-program contract: both declared programs land in one merged
+    graph, ordered by declaration, with declaration-index-qualified ids so two
+    programs can never collapse into one node."""
+    graph = _run_synthetic()
+
+    assert graph["schema_version"] == "0.2.0"
+    assert graph["main_programs"] == ["program_001_derive.sas", "program_002_summary.sas"]
+    program_ids = [n["id"] for n in graph["nodes"] if n["type"] == "Program"]
+    assert program_ids == [
+        "program:000_program_001_derive.sas",
+        "program:001_program_002_summary.sas",
+    ]
+
+
+def test_synthetic_same_named_macro_variable_stays_scoped_to_its_own_program():
+    """Both programs bind `%let domain` to a different value; the merged graph
+    must keep two distinct program-scoped nodes, not one collapsed node."""
+    graph = _run_synthetic()
+
+    domains = {
+        n["id"]: n["value"]
+        for n in graph["nodes"]
+        if n["type"] == "MacroVariable" and n["label"] == "domain"
+    }
+    assert domains == {
+        "macrovar:000_program_001_derive.sas:domain@1": "primary",
+        "macrovar:001_program_002_summary.sas:domain@1": "secondary",
+    }
+
+
+def test_synthetic_setup_wrapper_is_unwrapped_and_its_body_becomes_evidence():
+    """The setup file is thin and `%include`s a bootstrap whose whole body is
+    one directly-invoked, parameterless `%macro`. That wrapper is unwrapped, so
+    the body's LIBNAME is real evidence rather than control-flow silence."""
+    graph = _run_synthetic()
+
+    unwrapped = _findings_of(graph, "setup_macro_wrapper_unwrapped")
+    assert [f["status"] for f in unwrapped] == ["SUPPORTED"]
+    assert any(n["type"] == "Library" and n["id"] == "library:refdata" for n in graph["nodes"])
+
+
+def test_synthetic_adjacent_bare_os_fvars_calls_bind_against_the_declared_base():
+    """Two adjacent `%os_fvars(...)` calls with no terminating semicolon each
+    bind their own macro variable, composed onto the declared `os_fvars_base`
+    -- proving the bare-call split and the path composition together, without
+    either call swallowing the other."""
+    graph = _run_synthetic()
+
+    bound = {
+        n["label"]: n["value"]
+        for n in graph["nodes"]
+        if n["type"] == "MacroVariable" and n["label"] in {"work_path", "ref_path"}
+    }
+    assert bound == {
+        "work_path": "/synthetic/current/data/extract/",
+        "ref_path": "/synthetic/east/data/reference/",
+    }
+    assert not any(
+        f["type"] == "macro_source_not_found" and f["object"].lower() == "os_fvars"
+        for f in graph["findings"]
+    )
+
+
+def test_synthetic_dynamic_macro_call_sites_stay_isolated_between_programs():
+    """The regression this fixture exists for: one macro whose body has
+    statically unbound control flow is called once by each program. Each call
+    site must report its own non-executed finding, and neither call may leak a
+    dataset edge into the other program's declared output."""
+    graph = _run_synthetic()
+
+    not_executed = _findings_of(graph, "macro_control_flow_not_executed")
+    assert len(not_executed) == 2
+    assert {f["object"] for f in not_executed} == {"dynamic_split"}
+    assert {f["source"]["file"] for f in not_executed} == {
+        "program_001_derive.sas", "program_002_summary.sas",
+    }
+    assert all(f["status"] == "NOT_EXECUTED" for f in not_executed)
+
+    # Neither call bound its body, so neither declared output may appear as a
+    # written dataset -- a mirror edge from the other program's call site is
+    # exactly the failure mode this locks out.
+    written = {e["to"] for e in graph["edges"] if e["type"] == "writes_dataset"}
+    assert {
+        "dataset:work.derived_primary",
+        "dataset:work.derived_secondary",
+    }.isdisjoint(written)
+
+
+def test_synthetic_contract_only_macro_resolves_without_any_source_definition():
+    """`%gmApplyLabels` has a Markdown contract but no `.sas` definition
+    anywhere in the fixture, so the contract path -- not the source path -- is
+    what resolves it."""
+    graph = _run_synthetic()
+
+    assert any(
+        n["type"] == "MacroContract" and n["label"] == "gmApplyLabels"
+        for n in graph["nodes"]
+    )
+    assert [f["object"] for f in _findings_of(graph, "macro_contract_matched")] == [
+        "gmApplyLabels"
+    ]
+    assert not any(
+        n["type"] == "MacroDefinition" and n["label"] == "gmApplyLabels"
+        for n in graph["nodes"]
+    )
+
+
+def test_synthetic_source_resolvable_macro_still_produces_a_real_definition():
+    """The contract path must not have displaced ordinary source resolution:
+    the plain macro under `macro_roots` still resolves to a MacroDefinition and
+    writes its declared output."""
+    graph = _run_synthetic()
+
+    assert any(
+        n["type"] == "MacroDefinition" and n["id"] == "macrodefinition:simple_copy"
+        for n in graph["nodes"]
+    )
+    assert "dataset:work.summary_out" in {
+        e["to"] for e in graph["edges"] if e["type"] == "writes_dataset"
+    }
+
+
+def test_synthetic_proc_import_output_is_read_by_the_following_data_step():
+    """A literal `datafile=` reference (never opened) mints an ExternalFile
+    whose output dataset is read by the next DATA step -- so it must not be
+    reported as a dataset that was read but never written."""
+    graph = _run_synthetic()
+
+    edge = next(e for e in graph["edges"] if e["type"] == "reads_external_file")
+    assert edge["from"] == "externalfile:inputs/sample.csv"
+    assert edge["to"] == "dataset:work.sample_raw"
+    assert ("reads_dataset", "dataset:work.sample_raw") in {
+        (e["type"], e["to"]) for e in graph["edges"]
+    }
+    assert "work.sample_raw" not in {
+        f["object"] for f in _findings_of(graph, "dataset_read_never_written")
+    }
+
+
+def test_synthetic_merged_root_findings_are_run_wide_unique():
+    graph = _run_synthetic()
+
+    ids = [f["id"] for f in graph["findings"]]
+    assert len(ids) == len(set(ids))
+
+
+def test_synthetic_cli_run_writes_per_program_debug_artifacts(tmp_path):
+    """Each declared program keeps its own isolated debug parse alongside the
+    merged root artifacts, in a declaration-index-qualified directory. The
+    merged graph's status is what drives the exit code -- a worse isolated
+    debug status stays informational."""
+    workspace = tmp_path / "fx"
+    shutil.copytree(SYNTHETIC_FIXTURE.parent, workspace)
+
+    exit_code = _run(workspace / "project.yaml")
+
+    assert exit_code == 0
+    run_dir = next((workspace / "graph_runs" / "runs").iterdir())
+    for name in ("graph.json", "graph.mmd", "findings.md", "manifest.json"):
+        assert (run_dir / name).is_file()
+
+    programs_dir = run_dir / "programs"
+    assert sorted(p.name for p in programs_dir.iterdir()) == [
+        "000_program_001_derive.sas",
+        "001_program_002_summary.sas",
+    ]
+    expected_control_flow_sources = {
+        "000_program_001_derive.sas": "program_001_derive.sas",
+        "001_program_002_summary.sas": "program_002_summary.sas",
+    }
+    for program_dir in programs_dir.iterdir():
+        for name in ("graph.json", "findings.md", "manifest.json"):
+            assert (program_dir / name).is_file()
+        isolated = load_graph(program_dir / "graph.json")
+        assert {
+            finding["source"]["file"]
+            for finding in _findings_of(isolated, "macro_control_flow_not_executed")
+        } == {expected_control_flow_sources[program_dir.name]}
+        isolated_manifest = json.loads(
+            (program_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        assert isolated_manifest["findings_count"] == len(isolated["findings"])
+
+    merged = load_graph(run_dir / "graph.json")
+    assert merged["main_programs"] == ["program_001_derive.sas", "program_002_summary.sas"]
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest["config"]["main_programs"]) == 2
+    assert manifest["findings_count"] == len(merged["findings"])
 
 
 def demo():

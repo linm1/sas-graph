@@ -20,7 +20,7 @@ def build(text, file_name="adae.sas"):
     result = split_statements(text, file_name)
     _, unattached = group_blocks(result.statements)
     events = walk_let_statements(result.statements)
-    ctx = GraphContext(main_program=file_name, setup_file="setup.sas", run_id="r1")
+    ctx = GraphContext(main_programs=[file_name], setup_file="setup.sas", run_id="r1")
     ctx.add_node("program:adae.sas", "Program", "adae.sas", source=None)
     return unattached, ctx, events
 
@@ -28,7 +28,9 @@ def build(text, file_name="adae.sas"):
 def test_source_template_precedes_a_matched_contract_when_source_is_unique():
     """A unique source body is stronger evidence than its optional contract."""
     macro_index = build_macro_index([FIXTURES / "basic_adae" / "macros"])
-    macro_contracts = load_macro_contracts([FIXTURES / "qc_adae" / "contracts"])
+    macro_contracts = load_macro_contracts(
+        [FIXTURES / "synthetic_multi_program" / "contracts"]
+    )
     statements, ctx, events = build(
         "%gm_derive(inds=work.adae_srt, outds=adam.adae);\n"
     )

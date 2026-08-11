@@ -13,7 +13,7 @@ def build(text, file_name="adae.sas"):
     result = split_statements(text, file_name)
     blocks, _ = group_blocks(result.statements)
     events = walk_let_statements(result.statements)
-    ctx = GraphContext(main_program=file_name, setup_file="setup.sas", run_id="r1")
+    ctx = GraphContext(main_programs=[file_name], setup_file="setup.sas", run_id="r1")
     return blocks, ctx, events
 
 
@@ -157,7 +157,7 @@ def test_dupout_creates_writes_dataset_and_depends_on():
 
 
 def test_dupout_without_out_still_creates_writes_dataset():
-    """qc_adae.sas:995's shape: `dupout=` present with no `out=`."""
+    """`dupout=` without `out=` still records a write."""
     blocks, ctx, events = build(
         "proc sort data=work.adae dupout=work.adae_dups;\n  by usubjid;\nrun;\n"
     )
