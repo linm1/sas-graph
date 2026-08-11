@@ -162,7 +162,7 @@ function buildHtml(webview, context, renderModel, runStatus) {
     <select id="libraryFilter" class="filter-select"><option value="">All libraries</option></select>
   </div>
   <div id="hopGroup">
-    <div id="hopHeader"><label for="hopCeiling">Highlight depth</label><span id="hopValue">5 hops</span></div>
+    <div id="hopHeader"><label for="hopCeiling">Highlight depth</label><span id="hopValue">3 hops</span></div>
     <input id="hopCeiling" type="range" min="1" max="10" value="3" step="1" aria-label="Depth ceiling (hops)" />
   </div>
 </div>

@@ -6,19 +6,26 @@
 // src/libraryFilter.js / src/searchPredicate.js.
 //
 // Distance is computed pairwise between "hit" nodes (a search/filter
-// result set), walking ONLY the three lineage-carrying edge types
-// (reads_dataset, writes_dataset, implemented_by) as undirected edges.
+// result set), walking ONLY the five lineage-carrying edge types
+// (reads_dataset, writes_dataset, reads_external_file,
+// writes_external_file, implemented_by) as undirected edges.
 // depends_on and every containment/structural edge (contains_step,
 // contains_sql_statement, calls_macro, defined_in, has_control_flow,
 // conditional_candidate, passes_parameter) are never walked — see
 // wayfinder/spec-traversal-legible-filter-results.md's "Traversal edge set"
 // decision: those edges either duplicate the lineage path at a different
 // hop count (depends_on) or collapse the whole program to ~4 hops via hub
-// nodes (containment). template_derived-flagged mirror edges of the three
+// nodes (containment). template_derived-flagged mirror edges of the five
 // propagating types ARE walked like any other edge of that type — the flag
 // is not a branch condition here, only in ticket 01's click-info panel.
 
-const PROPAGATING_TYPES = new Set(["reads_dataset", "writes_dataset", "implemented_by"]);
+const PROPAGATING_TYPES = new Set([
+  "reads_dataset",
+  "writes_dataset",
+  "reads_external_file",
+  "writes_external_file",
+  "implemented_by",
+]);
 
 /**
  * @param {any[]} edges - render-model edges (ticket 01 convertGraph shape)
@@ -73,7 +80,7 @@ function pairKey(a, b) {
 
 /**
  * Compute pairwise hop distance between every pair of `hitIds`, walking only
- * the three lineage-carrying edge types (see module doc comment above),
+ * the five lineage-carrying edge types (see module doc comment above),
  * bounded by `ceiling`.
  *
  * Return shape (fixed — tickets 03 and 04 both consume this as-is):

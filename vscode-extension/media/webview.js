@@ -130,11 +130,10 @@
   //      from step 1 unchanged.
   // ---------------------------------------------------------------------
   // DEFAULT_HOP_CEILING (ticket 03) is now only the slider's/state's initial
-  // value (ticket 04) — matches the spec's measured recommendation
-  // (wayfinder/spec-traversal-legible-filter-results.md). The
-  // computeHopDistances call site below uses the live state.ceiling, not
-  // this constant.
-  const DEFAULT_HOP_CEILING = 5;
+  // value (ticket 04) — must match the slider markup's initial `value`
+  // attribute (webviewPanel.js) and its label text. The computeHopDistances
+  // call site below uses the live state.ceiling, not this constant.
+  const DEFAULT_HOP_CEILING = 3;
 
   const state = {
     selected: null,

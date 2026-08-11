@@ -50,6 +50,25 @@ test("implemented_by propagates distance", () => {
   assert.equal(distances.get("b"), 1);
 });
 
+test("external-file import and export edges propagate lineage distance", () => {
+  const nodes = [
+    node("externalfile:/data/raw/lookup.xlsx", "ExternalFile"),
+    node("dataset:work.lookup", "Dataset"),
+    node("dataset:work.ae", "Dataset"),
+    node("externalfile:/data/out/ae.xlsx", "ExternalFile"),
+  ];
+  const edges = [
+    edge("e1", "reads_external_file", "externalfile:/data/raw/lookup.xlsx", "dataset:work.lookup"),
+    edge("e2", "writes_external_file", "dataset:work.ae", "externalfile:/data/out/ae.xlsx"),
+  ];
+
+  const imported = computeHopDistances(nodes, edges, ["externalfile:/data/raw/lookup.xlsx"], 5);
+  assert.equal(imported.distances.get("dataset:work.lookup"), 1);
+
+  const exported = computeHopDistances(nodes, edges, ["dataset:work.ae"], 5);
+  assert.equal(exported.distances.get("externalfile:/data/out/ae.xlsx"), 1);
+});
+
 test("a template_derived: true mirror edge is counted toward distance, not skipped", () => {
   const nodes = [node("a"), node("b")];
   const edges = [edge("e1", "reads_dataset", "a", "b", { template_derived: true })];

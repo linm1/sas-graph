@@ -127,8 +127,9 @@ function applyHoverToNode(baseline, isHighlighted) {
 }
 
 /**
- * A hit node has "no lineage" if it has zero incident edges of the three
- * distance-propagating types (reads_dataset/writes_dataset/implemented_by).
+ * A hit node has "no lineage" if it has zero incident edges of the five
+ * distance-propagating types (dataset reads/writes, external-file
+ * reads/writes, or implemented_by).
  * Pure edge scan — deliberately not a fourth field on computeHopDistances's
  * return shape (ticket 02's shape is fixed at three fields); this stays a
  * narrowly-scoped predicate in visualState.js instead.
@@ -179,7 +180,8 @@ function deriveStatusMessage(hitList, pairStatus, edges, propagatingTypes, ceili
     const names = noLineageHits.slice(0, MAX_NAMED).map((id) => `"${labelOf(id)}"`).join(", ");
     const rest = noLineageHits.length - MAX_NAMED;
     const who = rest > 0 ? `${names}, and ${rest} more` : names;
-    return `No lineage edges (reads/writes/implemented-by) to trace for: ${who}.`;
+    return `No lineage edges (dataset reads/writes, external-file reads/writes, ` +
+       `or implemented-by) to trace for: ${who}.`;
   })();
 
   // All hits lack lineage: the note IS the whole story, replace the default.
