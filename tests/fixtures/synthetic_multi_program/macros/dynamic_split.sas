@@ -1,0 +1,13 @@
+%macro dynamic_split(inds=, outds=);
+    %if &mode_flag = extended %then %do;
+        data &outds;
+            set &inds;
+        run;
+    %end;
+    %else %do;
+        data &outds;
+            set &inds;
+            where active = 1;
+        run;
+    %end;
+%mend dynamic_split;
