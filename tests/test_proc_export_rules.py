@@ -9,7 +9,7 @@ from sas_graph.macro_state import walk_let_statements
 from sas_graph.statements import split_statements
 
 
-def build(text, file_name="main.sas"):
+def build(text, file_name="qc_adae.sas"):
     result = split_statements(text, file_name)
     blocks, _ = group_blocks(result.statements)
     events = walk_let_statements(result.statements)

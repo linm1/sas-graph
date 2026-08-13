@@ -17,6 +17,7 @@ graphify-out/
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.vsix
 .pytest_cache/
 .coverage
 htmlcov/

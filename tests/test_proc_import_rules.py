@@ -9,7 +9,7 @@ from sas_graph.macro_state import walk_let_statements
 from sas_graph.statements import split_statements
 
 
-def build(text, file_name="main.sas"):
+def build(text, file_name="qc_adae.sas"):
     result = split_statements(text, file_name)
     blocks, _ = group_blocks(result.statements)
     events = walk_let_statements(result.statements)
@@ -18,7 +18,8 @@ def build(text, file_name="main.sas"):
 
 
 def test_basic_import_creates_externalfile_node_and_reads_external_file_edge():
-    """`sheet=`/`getnames=` can be on their own block-body lines, not the opener."""
+    """qc_adae.sas:141-146's own shape: sheet=/getnames= split onto their own
+    statement lines inside the block body, not the opener."""
     blocks, ctx, events = build(
         'proc import datafile="/data/raw/ae.xlsx"\n'
         "    out=work.ae_raw\n"
@@ -42,7 +43,7 @@ def test_basic_import_creates_externalfile_node_and_reads_external_file_edge():
 
 
 def test_out_option_dataset_options_in_parens_do_not_leak_into_dataset_id():
-    """Dataset options following `out=` must not leak into the dataset id."""
+    """qc_adae.sas:166's own shape: `out=smq_ptcounts_raw(keep=A B C)`."""
     blocks, ctx, events = build(
         'proc import datafile="/data/raw/ae.xlsx"\n'
         "    out=smq_ptcounts_raw(keep=A B C)\n"

@@ -121,8 +121,9 @@ def test_manifest_records_config_provenance_and_source_hashes():
 def test_manifest_findings_count_reflects_the_run_graph_not_the_config_result():
     """A successful run's config_result.findings is always empty (config was
     valid) -- build_manifest must not silently report 0 findings when the
-    graph itself has real ones. A prior acceptance run exposed this exact
-    mismatch between manifest.json and graph.json."""
+    graph itself has real ones. Discovered during phase-5 acceptance: the
+    qc_adae run's manifest.json claimed findings_count: 0 alongside 39 real
+    findings in graph.json."""
     result = load_config(FIXTURE)
     graph = run(result, run_id="findings-count-check")
 

@@ -83,7 +83,7 @@ def apply(block, ctx, let_events, source_order=None):
         source=block.as_source("proc_sort_out" if out_match else "proc_sort_implicit"),
     )
 
-    ctx.add_edge("reads_dataset", step_id, input_id, block.as_source("proc_sort_data"))
+    ctx.add_edge("reads_dataset", input_id, step_id, block.as_source("proc_sort_data"))
     ctx.add_edge("writes_dataset", step_id, output_id, block.as_source("proc_sort_out"))
 
     dupout_match = _DUPOUT_OPT_RE.search(opener.text)

@@ -50,11 +50,13 @@ const EXCLUDED_TYPES = new Set(["CommentBlock", "MacroParameter"]);
 // contains_step, passes_parameter, defines_macro_variable, depends_on,
 // resolves_to, ...) intentionally gets no arrowhead override here — they
 // keep vis-network's default rendering. This is a deliberate scope
-// narrowing to the five lineage-carrying types the spec calls out, not an
+// narrowing to the lineage-carrying types the spec calls out, not an
 // oversight.
 const ARROWHEAD_BY_TYPE = {
   reads_dataset: { to: { enabled: true, type: "vee" } },
   writes_dataset: { to: { enabled: true, type: "triangle" } },
+  reads_variable: { to: { enabled: true, type: "vee" } },
+  writes_variable: { to: { enabled: true, type: "triangle" } },
   reads_external_file: { to: { enabled: true, type: "vee" } },
   writes_external_file: { to: { enabled: true, type: "triangle" } },
   implemented_by: { to: { enabled: true, type: "circle" } },
@@ -77,12 +79,13 @@ function assignArrowhead(edgeType) {
  * for edge types with no readable phrasing defined (e.g. depends_on,
  * calls_macro) so no edge is left without a title.
  * @param {string} edgeType
+ * @param {string} sourceLabel - label of the edge's `from` node
  * @param {string} targetLabel - label of the edge's `to` node
  * @returns {string}
  */
-function edgeTitle(edgeType, targetLabel) {
-  if (edgeType === "reads_dataset") return `reads ${targetLabel}`;
-  if (edgeType === "writes_dataset") return `writes ${targetLabel}`;
+function edgeTitle(edgeType, sourceLabel, targetLabel) {
+  if (edgeType === "reads_dataset" || edgeType === "reads_variable") return `reads ${sourceLabel}`;
+  if (edgeType === "writes_dataset" || edgeType === "writes_variable") return `writes ${targetLabel}`;
   if (edgeType === "implemented_by") return `implemented by ${targetLabel}`;
   return edgeType;
 }
@@ -164,7 +167,7 @@ function convertGraph(graph) {
     type: e.type,
     template_derived: e.template_derived,
     arrows: assignArrowhead(e.type),
-    title: edgeTitle(e.type, nodeLabelById.get(e.to)),
+    title: edgeTitle(e.type, nodeLabelById.get(e.from), nodeLabelById.get(e.to)),
   }));
 
   return { nodes, edges };

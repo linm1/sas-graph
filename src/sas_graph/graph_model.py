@@ -138,6 +138,44 @@ class GraphContext:
         )
         return node_id
 
+    def add_variable(self, raw_name, raw_variable):
+        """Register a `Variable` node from a raw `libref.member` (or bare) dataset
+        name plus a raw variable name.
+
+        Returns the node id. Follows `add_dataset`'s exact posture (wayfinder:
+        specify-variable-node-and-edge-contract): deduped by id, `source: null`.
+        """
+        libref, member = normalize_dataset(raw_name, self.libref_map)
+        variable = raw_variable.lower()
+        node_id = f"variable:{libref}.{member}.{variable}"
+        self.add_node(
+            node_id,
+            "Variable",
+            f"{libref}.{member}.{variable}",
+            libref=libref,
+            member=member,
+            variable=variable,
+        )
+        return node_id
+
+    def add_unknown_variable(self, unresolved_expression, statement_order, source):
+        """Register a per-occurrence `UnknownVariable` node.
+
+        Unlike `UnknownDataset`, not deduped by raw text (wayfinder:
+        specify-variable-node-and-edge-contract) -- an unqualified variable's raw
+        text collides far more easily across unrelated statements, so identity is
+        disambiguated per occurrence with `@{statement_order}`.
+        """
+        node_id = f"unknownvariable:{unresolved_expression}@{statement_order}"
+        self.add_node(
+            node_id,
+            "UnknownVariable",
+            unresolved_expression,
+            unresolved_expression=unresolved_expression,
+            source=source,
+        )
+        return node_id
+
     # --- edges -----------------------------------------------------------
 
     def add_edge(self, edge_type, from_id, to_id, source, **extra):
@@ -206,6 +244,7 @@ class GraphContext:
             "UNRESOLVED_MACRO_SOURCE",
             "MACRO_CONFLICT",
             "CONDITIONAL_BRANCH_UNRESOLVED",
+            "UNQUALIFIED_VARIABLE",
         }
         if any(f["status"] in partial_statuses for f in self.findings):
             return "PARTIAL"

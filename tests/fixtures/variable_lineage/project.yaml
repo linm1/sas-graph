@@ -1,0 +1,18 @@
+# wayfinder: variable-lineage-acceptance-evidence-fixture. Three small
+# programs (sdtm.lb -> adam.adlb -> a TLF summary) proving flag impact,
+# ordered imputed-date use, and category coverage at the variable level.
+# Deliberately macro-free: a macro whose body contains any control flow
+# blocks the static-binding gate (wayfinder:
+# attribute-shared-macro-reads-per-call-site's known boundary), which would
+# make a flag-impact path through a macro unprovable for a reason unrelated
+# to this fixture. tests/fixtures/qc_adae/ stays unchanged.
+main_program:
+  - sdtm_lb.sas
+  - adam_adlb.sas
+  - tlf_summary.sas
+setup_file: setup.sas
+
+allowed_roots:
+  - .
+
+output_dir: graph_runs

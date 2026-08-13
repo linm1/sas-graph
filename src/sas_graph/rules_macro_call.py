@@ -226,7 +226,7 @@ def apply(
         )
         if program_path is not None and definition.path == program_path:
             # Inline definition in the file already modeled by program_node_id
-            # (e.g. a program defining and calling its own macro) -- a
+            # (e.g. qc_adae.sas defining and calling its own macro) -- a
             # MacroSourceFile node here would just duplicate that Program/
             # SetupFile node, so `defined_in` points at it directly instead.
             ctx.add_edge("defined_in", definition_id, program_node_id, definition_source)
@@ -481,17 +481,50 @@ def _bind_source_template(
         item["definition_source"] = definition_source
 
     for edge in ctx.edges[edges_before:]:
-        if edge["type"] not in {"reads_dataset", "writes_dataset"}:
-            continue
-        ctx.add_edge(
-            edge["type"],
-            call_id,
-            edge["to"],
-            call_source,
-            template_derived=True,
-            definition_source=definition_source,
-            call_source=call_source,
-        )
+        if edge["type"] == "reads_dataset":
+            ctx.add_edge(
+                edge["type"],
+                edge["from"],
+                call_id,
+                call_source,
+                template_derived=True,
+                definition_source=definition_source,
+                call_source=call_source,
+            )
+        elif edge["type"] == "writes_dataset":
+            ctx.add_edge(
+                edge["type"],
+                call_id,
+                edge["to"],
+                call_source,
+                template_derived=True,
+                definition_source=definition_source,
+                call_source=call_source,
+            )
+        elif edge["type"] == "writes_variable":
+            ctx.add_edge(
+                edge["type"],
+                call_id,
+                edge["to"],
+                call_source,
+                value=edge.get("value"),
+                operator=edge.get("operator"),
+                template_derived=True,
+                definition_source=definition_source,
+                call_source=call_source,
+            )
+        elif edge["type"] == "reads_variable":
+            ctx.add_edge(
+                edge["type"],
+                edge["from"],
+                call_id,
+                call_source,
+                value=edge.get("value"),
+                operator=edge.get("operator"),
+                template_derived=True,
+                definition_source=definition_source,
+                call_source=call_source,
+            )
 
     definition_node = next(node for node in ctx.nodes if node["id"] == definition_id)
     definition_node["template_status"] = control_status if controls else "SUPPORTED"

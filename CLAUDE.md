@@ -2,7 +2,7 @@
 
 Source-only static dependency graph parser for SAS task programs. Reads SAS
 source, emits `graph.json`/`graph.mmd`/`findings.md`. Never executes SAS,
-never opens a dataset (`sas_graph_dev_plan.md` section 2, non-negotiable).
+never opens a dataset (non-negotiable; see design rationale below).
 
 ## Architecture (as built, not aspirational)
 
@@ -28,12 +28,10 @@ Pipeline, in `run_pipeline.py`'s own order:
 
 ## Where the design authority lives
 
-Module docstrings cite the project's internal design spec by section number
-(`section 9`, `section 21 Phase 4`, ...), and record the decisions behind
-non-obvious choices (e.g. why dataset nodes have `source: null`). **Before
-changing behavior, find and read the section the nearest docstring cites.**
-Don't infer intent from code shape alone when a citation is sitting right
-there.
+The repository's module docstrings and documentation record the rationale
+behind non-obvious choices. **Before changing behavior, find and read the
+nearest documented rationale.** Don't infer intent from code shape alone when
+a citation is sitting right there.
 
 ## Think Before Coding
 

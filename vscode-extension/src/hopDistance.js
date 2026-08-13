@@ -6,9 +6,9 @@
 // src/libraryFilter.js / src/searchPredicate.js.
 //
 // Distance is computed pairwise between "hit" nodes (a search/filter
-// result set), walking ONLY the five lineage-carrying edge types
-// (reads_dataset, writes_dataset, reads_external_file,
-// writes_external_file, implemented_by) as undirected edges.
+// result set), walking ONLY lineage-carrying edge types (dataset and
+// variable reads/writes, external-file reads/writes, implemented_by) as
+// undirected edges.
 // depends_on and every containment/structural edge (contains_step,
 // contains_sql_statement, calls_macro, defined_in, has_control_flow,
 // conditional_candidate, passes_parameter) are never walked — see
@@ -22,6 +22,8 @@
 const PROPAGATING_TYPES = new Set([
   "reads_dataset",
   "writes_dataset",
+  "reads_variable",
+  "writes_variable",
   "reads_external_file",
   "writes_external_file",
   "implemented_by",
