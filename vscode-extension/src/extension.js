@@ -5,8 +5,9 @@ const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
 const { GraphSidebarProvider } = require("./webviewPanel.js");
-const { buildLineIndex, lookupInnermostNode } = require("./lineIndex.js");
+const { lookupInnermostNode } = require("./lineIndex.js");
 const { extractOutputDir, pickLatestRun } = require("./projectConfig.js");
+const { loadGraphFromPath } = require("./graphLoader.js");
 
 /**
  * Ticket 09: locate the current workspace's project.yaml, resolve its
@@ -81,23 +82,6 @@ async function pickGraphJsonManually() {
   return picked && picked.length ? picked[0].fsPath : undefined;
 }
 
-/**
- * Build source records (id/type/file/line_start/line_end) from a parsed
- * graph.json's nodes, for the line-index (ticket 06).
- * @param {any} graphJson
- */
-function sourceRecordsFromGraph(graphJson) {
-  return (graphJson.nodes || [])
-    .filter((n) => n.source)
-    .map((n) => ({
-      id: n.id,
-      type: n.type,
-      file: n.source.file,
-      line_start: n.source.line_start,
-      line_end: n.source.line_end,
-    }));
-}
-
 /** @param {vscode.ExtensionContext} context */
 function activate(context) {
   /** @type {Map<string, any[]> | undefined} */
@@ -109,24 +93,22 @@ function activate(context) {
   );
 
   /** @param {string} graphPath */
-  function loadGraphFromPath(graphPath) {
-    let graphJson;
-    try {
-      graphJson = JSON.parse(fs.readFileSync(graphPath, "utf-8"));
-    } catch (err) {
+  function showGraphFromPath(graphPath) {
+    const result = loadGraphFromPath(graphPath);
+    if (result.error) {
       lineIndex = undefined;
-      sidebar.setError(`SAS Graph: failed to read/parse ${graphPath}: ${err instanceof Error ? err.message : String(err)}`);
+      sidebar.setError(result.error);
       return;
     }
 
-    lineIndex = buildLineIndex(sourceRecordsFromGraph(graphJson));
-    sidebar.setGraph(graphJson);
+    lineIndex = result.lineIndex;
+    sidebar.setGraph(result.graphJson);
   }
 
   function loadLatestGraph() {
     const result = resolveGraphJsonPath();
     if (result.path) {
-      loadGraphFromPath(result.path);
+      showGraphFromPath(result.path);
     } else {
       lineIndex = undefined;
       sidebar.setError(result.error || "SAS Graph: no graph is loaded.");
@@ -145,7 +127,7 @@ function activate(context) {
   const openManualDisposable = vscode.commands.registerCommand("sasGraph.openGraphViewManual", async () => {
     await revealSidebar();
     const graphPath = await pickGraphJsonManually();
-    if (graphPath) loadGraphFromPath(graphPath);
+    if (graphPath) showGraphFromPath(graphPath);
   });
 
   // Cursor-to-node sync (ticket 06): on every selection change in the

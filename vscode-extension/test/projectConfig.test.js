@@ -8,8 +8,8 @@ const assert = require("node:assert/strict");
 
 const { extractOutputDir, pickLatestRun } = require("../src/projectConfig.js");
 
-test("extractOutputDir reads a plain unquoted scalar (real fixture shape)", () => {
-  const yaml = `main_program: adae.sas\nsetup_file: setup.sas\n\noutput_dir: graph_runs\n`;
+test("extractOutputDir reads a plain unquoted scalar (real qc_adae fixture shape)", () => {
+  const yaml = `main_program: qc_adae.sas\nsetup_file: setup.sas\n\noutput_dir: graph_runs\n`;
   assert.equal(extractOutputDir(yaml), "graph_runs");
 });
 

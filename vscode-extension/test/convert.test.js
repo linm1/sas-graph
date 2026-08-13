@@ -236,10 +236,9 @@ test("title is a human-readable phrase for reads_dataset, writes_dataset, implem
   const { edges } = convertGraph(graph);
   const edgeById = new Map(edges.map((e) => [e.id, e]));
 
-  const reads = edgeById.get("edge:001"); // step:001 reads_dataset dataset:sdtm.ae
+  const reads = edgeById.get("edge:001"); // dataset:sdtm.ae reads_dataset step:001
   assert.equal(reads.type, "reads_dataset");
-  assert.notEqual(reads.title, "reads_dataset");
-  assert.match(reads.title, /sdtm\.ae/);
+  assert.equal(reads.title, "reads sdtm.ae");
 
   const writes = edgeById.get("edge:003"); // step:001 writes_dataset dataset:work.adae_pre
   assert.equal(writes.type, "writes_dataset");
@@ -252,9 +251,50 @@ test("title is a human-readable phrase for reads_dataset, writes_dataset, implem
   assert.match(implementedBy.title, /gm_derive/);
 });
 
+test("variable lineage uses the same arrows and object-consistent tooltips as dataset lineage", () => {
+  const graph = {
+    nodes: [
+      { id: "variable:work.a.flag", type: "Variable", label: "flag" },
+      { id: "step:001", type: "Step", label: "DATA step 001" },
+      { id: "variable:work.a.out", type: "Variable", label: "out" },
+    ],
+    edges: [
+      { id: "read", type: "reads_variable", from: "variable:work.a.flag", to: "step:001" },
+      { id: "write", type: "writes_variable", from: "step:001", to: "variable:work.a.out" },
+    ],
+  };
+
+  const edgeById = new Map(convertGraph(graph).edges.map((edge) => [edge.id, edge]));
+  assert.deepEqual(edgeById.get("read").arrows, { to: { enabled: true, type: "vee" } });
+  assert.equal(edgeById.get("read").title, "reads flag");
+  assert.deepEqual(edgeById.get("write").arrows, { to: { enabled: true, type: "triangle" } });
+  assert.equal(edgeById.get("write").title, "writes out");
+});
+
+test("external-file arrowheads and raw-type tooltips remain unchanged", () => {
+  const graph = {
+    nodes: [
+      { id: "externalfile:in", type: "ExternalFile", label: "in.xlsx" },
+      { id: "dataset:work.a", type: "Dataset", label: "work.a" },
+    ],
+    edges: [
+      { id: "read", type: "reads_external_file", from: "externalfile:in", to: "dataset:work.a" },
+      { id: "write", type: "writes_external_file", from: "dataset:work.a", to: "externalfile:in" },
+    ],
+  };
+
+  const edgeById = new Map(convertGraph(graph).edges.map((edge) => [edge.id, edge]));
+  assert.deepEqual(edgeById.get("read").arrows, { to: { enabled: true, type: "vee" } });
+  assert.equal(edgeById.get("read").title, "reads_external_file");
+  assert.deepEqual(edgeById.get("write").arrows, { to: { enabled: true, type: "triangle" } });
+  assert.equal(edgeById.get("write").title, "writes_external_file");
+});
+
 test("assignArrowhead is a pure function of edge.type alone", () => {
   assert.deepEqual(assignArrowhead("reads_dataset"), { to: { enabled: true, type: "vee" } });
   assert.deepEqual(assignArrowhead("writes_dataset"), { to: { enabled: true, type: "triangle" } });
+  assert.deepEqual(assignArrowhead("reads_variable"), { to: { enabled: true, type: "vee" } });
+  assert.deepEqual(assignArrowhead("writes_variable"), { to: { enabled: true, type: "triangle" } });
   assert.deepEqual(assignArrowhead("implemented_by"), { to: { enabled: true, type: "circle" } });
   assert.deepEqual(assignArrowhead("reads_external_file"), { to: { enabled: true, type: "vee" } });
   assert.deepEqual(assignArrowhead("writes_external_file"), { to: { enabled: true, type: "triangle" } });

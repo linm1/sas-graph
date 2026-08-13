@@ -50,6 +50,53 @@ def test_add_unknown_dataset_carries_its_source():
     assert node["source"] == source
 
 
+def test_add_variable_returns_stable_id_and_dedupes():
+    ctx = make_context()
+    first = ctx.add_variable("adam.adlb", "ANL01FL")
+    second = ctx.add_variable("adam.adlb", "anl01fl")
+
+    assert first == second == "variable:adam.adlb.anl01fl"
+    assert len([n for n in ctx.nodes if n["id"] == "variable:adam.adlb.anl01fl"]) == 1
+
+
+def test_add_variable_node_has_null_source():
+    ctx = make_context()
+    ctx.add_variable("adam.adlb", "anl01fl")
+
+    node = next(n for n in ctx.nodes if n["id"] == "variable:adam.adlb.anl01fl")
+    assert node["type"] == "Variable"
+    assert node["source"] is None
+    assert node["libref"] == "adam"
+    assert node["member"] == "adlb"
+    assert node["variable"] == "anl01fl"
+
+
+def test_add_unknown_variable_is_disambiguated_per_occurrence():
+    ctx = make_context()
+    source = {"file": "a.sas", "line_start": 12, "line_end": 12, "statement_order": 12,
+              "original_text": "if flag = 'Y' then;", "rule": "unqualified_variable_reference"}
+    first = ctx.add_unknown_variable("flag", 12, source)
+    second = ctx.add_unknown_variable("flag", 20, source)
+
+    assert first == "unknownvariable:flag@12"
+    assert second == "unknownvariable:flag@20"
+    assert first != second
+
+    node = next(n for n in ctx.nodes if n["id"] == first)
+    assert node["type"] == "UnknownVariable"
+    assert node["unresolved_expression"] == "flag"
+    assert node["source"] == source
+
+
+def test_run_status_partial_when_unqualified_variable_finding_present():
+    ctx = make_context()
+    ctx.add_finding(
+        "unqualified_variable_reference", "UNQUALIFIED_VARIABLE", "WARNING", "flag",
+        "msg", None, source=None,
+    )
+    assert ctx.run_status() == "PARTIAL"
+
+
 def test_step_ids_increment_and_are_zero_padded():
     ctx = make_context()
     assert ctx.next_step_id() == "step:001"
@@ -58,13 +105,13 @@ def test_step_ids_increment_and_are_zero_padded():
 
 def test_edge_ids_increment_and_edge_carries_from_to_type():
     ctx = make_context()
-    edge_id = ctx.add_edge("reads_dataset", "step:001", "dataset:sdtm.ae", source=None)
+    edge_id = ctx.add_edge("reads_dataset", "dataset:sdtm.ae", "step:001", source=None)
 
     assert edge_id == "edge:001"
     edge = ctx.edges[0]
     assert edge["type"] == "reads_dataset"
-    assert edge["from"] == "step:001"
-    assert edge["to"] == "dataset:sdtm.ae"
+    assert edge["from"] == "dataset:sdtm.ae"
+    assert edge["to"] == "step:001"
 
 
 def test_finding_ids_are_unique_across_calls():

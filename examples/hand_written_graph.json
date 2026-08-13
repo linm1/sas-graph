@@ -309,8 +309,8 @@
     {
       "id": "edge:001",
       "type": "reads_dataset",
-      "from": "step:001",
-      "to": "dataset:sdtm.ae",
+      "from": "dataset:sdtm.ae",
+      "to": "step:001",
       "source": {
         "file": "adae.sas",
         "line_start": 2,
@@ -323,8 +323,8 @@
     {
       "id": "edge:002",
       "type": "reads_dataset",
-      "from": "step:001",
-      "to": "dataset:adam.adsl",
+      "from": "dataset:adam.adsl",
+      "to": "step:001",
       "source": {
         "file": "adae.sas",
         "line_start": 2,
@@ -380,8 +380,8 @@
     {
       "id": "edge:006",
       "type": "reads_dataset",
-      "from": "step:002",
-      "to": "dataset:work.adae_pre",
+      "from": "dataset:work.adae_pre",
+      "to": "step:002",
       "source": {
         "file": "adae.sas",
         "line_start": 5,
@@ -479,8 +479,8 @@
     {
       "id": "edge:013",
       "type": "reads_dataset",
-      "from": "macrocall:003",
-      "to": "dataset:work.adae_srt",
+      "from": "dataset:work.adae_srt",
+      "to": "macrocall:003",
       "contract_derived": true,
       "source": {
         "file": "adae.sas",

@@ -3,7 +3,7 @@
 Source-only static dependency graph for SAS task programs. Reads SAS source,
 emits a graph — never executes SAS, never opens a dataset.
 
-See the project's internal design plan for the full design.
+The repository documentation describes the full design.
 
 ## Status
 
@@ -20,10 +20,6 @@ real anonymized program, has run and closed with concerns.
 | 3 | Macro state, `%include`, `%let` resolution | done |
 | 4 | DATA / PROC SORT / PROC SQL / macro rules and `run` | done |
 | 5 | Acceptance test on an anonymized program | done with concerns |
-
-Phase 5's acceptance evidence — the run, every §21/§23 criterion verdict, and
-the two remaining concerns — is recorded in the project's internal acceptance
-report.
 
 `manifest.json` sits in Phase 1 per §21, not Phase 0, even though §4.2 lists it
 in the generation order — it records source hashes, which need the config
@@ -78,9 +74,8 @@ that directory is generated output, not source.
 - **Relative paths in `project.yaml` resolve against the config file**, not the
   working directory, so a config means the same thing from any shell.
 - **`allowed_roots` is a read boundary.** Every declared source file must resolve
-  inside one, checked with `Path.resolve()` and a component-aware relative-path
-  check so `..` and a shared name prefix (`/study/adae-evil` against
-  `/study/adae`) both fail. The check remains compatible with Python 3.8.
+  inside one, checked with `Path.resolve()` and `is_relative_to()` so `..` and a
+  shared name prefix (`/study/adae-evil` against `/study/adae`) both fail.
   `output_dir` is a write target and is deliberately not held to it — it is only
   refused if it points into a production or log location.
 

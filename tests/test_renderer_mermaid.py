@@ -24,10 +24,10 @@ def test_renders_flow_header_and_dataset_nodes():
     assert '  macrocall_003{{"%gm_derive"}}' in out
 
 
-def test_reads_dataset_edge_is_flipped_to_read_left_to_right():
+def test_reads_dataset_edge_is_rendered_from_canonical_endpoints():
     out = render(load_graph(FIXTURE))
 
-    # graph stores step -> dataset; the diagram must show dataset -> step
+    # graph already stores dataset -> step; rendering must preserve it.
     assert "  dataset_sdtm_ae --> step_001" in out
     assert "  step_001 --> dataset_sdtm_ae" not in out
     assert "  step_001 --> dataset_work_adae_pre" in out
@@ -67,7 +67,7 @@ def test_unknown_nodes_are_styled():
 def demo():
     test_mermaid_id_sanitises_dots_and_ampersands()
     test_renders_flow_header_and_dataset_nodes()
-    test_reads_dataset_edge_is_flipped_to_read_left_to_right()
+    test_reads_dataset_edge_is_rendered_from_canonical_endpoints()
     test_contract_derived_edges_use_a_dotted_arrow()
     test_depends_on_edges_are_not_drawn()
     test_detail_nodes_are_excluded_from_the_flow_view()

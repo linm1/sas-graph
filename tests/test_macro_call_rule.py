@@ -28,9 +28,7 @@ def build(text, file_name="adae.sas"):
 def test_source_template_precedes_a_matched_contract_when_source_is_unique():
     """A unique source body is stronger evidence than its optional contract."""
     macro_index = build_macro_index([FIXTURES / "basic_adae" / "macros"])
-    macro_contracts = load_macro_contracts(
-        [FIXTURES / "synthetic_multi_program" / "contracts"]
-    )
+    macro_contracts = load_macro_contracts([FIXTURES / "qc_adae" / "contracts"])
     statements, ctx, events = build(
         "%gm_derive(inds=work.adae_srt, outds=adam.adae);\n"
     )
@@ -275,13 +273,60 @@ def test_source_template_binds_data_dependencies_at_the_call_site(tmp_path):
 
     call_id = next(node["id"] for node in ctx.nodes if node["type"] == "MacroCall")
     edges = {(edge["type"], edge["from"], edge["to"]) for edge in ctx.edges}
-    assert ("reads_dataset", call_id, "dataset:sdtm.ae") in edges
+    assert ("reads_dataset", "dataset:sdtm.ae", call_id) in edges
     assert ("writes_dataset", call_id, "dataset:work.adae_pre") in edges
     assert ("depends_on", "dataset:work.adae_pre", "dataset:sdtm.ae") in edges
     template_edges = [edge for edge in ctx.edges if edge.get("template_derived")]
     assert template_edges
     assert all(edge["call_source"]["file"] == "adae.sas" for edge in template_edges)
     assert all(edge["definition_source"]["file"].endswith("test.sas") for edge in template_edges)
+
+
+def test_source_template_binds_variable_edges_at_the_call_site(tmp_path):
+    (tmp_path / "test.sas").write_text(
+        "%macro test(inds=, outds=);\n"
+        "data &outds.; set &inds.; anl01vs = anl01fl; run;\n"
+        "%mend test;\n",
+        encoding="utf-8",
+    )
+    statements, ctx, events = build("%test(inds=sdtm.ae, outds=work.a);\n")
+
+    rules_macro_call.apply(
+        statements[0], ctx, events, build_macro_index([tmp_path]),
+        load_macro_contracts([]), "program:adae.sas",
+    )
+
+    call_id = next(node["id"] for node in ctx.nodes if node["type"] == "MacroCall")
+    edges = {(edge["type"], edge["from"], edge["to"]) for edge in ctx.edges}
+    assert ("writes_variable", call_id, "variable:work.a.anl01vs") in edges
+    assert ("reads_variable", "variable:work.a.anl01fl", call_id) in edges
+
+    variable_node_ids = [
+        node["id"] for node in ctx.nodes if node["id"] == "variable:work.a.anl01vs"
+    ]
+    assert len(variable_node_ids) == 1
+
+    template_variable_edges = [
+        edge for edge in ctx.edges
+        if edge.get("template_derived") and edge["type"] in {"reads_variable", "writes_variable"}
+    ]
+    assert template_variable_edges
+    assert all(edge["call_source"]["file"] == "adae.sas" for edge in template_variable_edges)
+    assert all(edge["definition_source"]["file"].endswith("test.sas") for edge in template_variable_edges)
+
+
+def test_control_flow_blocked_call_produces_no_variable_mirror_edge(tmp_path):
+    (tmp_path / "test.sas").write_text(
+        "%macro test();\n"
+        "%do i=1 %to 99; data work.out&i.; set sdtm.in&i.; x&i. = 1; run; %end;\n"
+        "%mend test;\n",
+        encoding="utf-8",
+    )
+    statements, ctx, events = build("%test();\n")
+    rules_macro_call.apply(statements[0], ctx, events, build_macro_index([tmp_path]), load_macro_contracts([]), "program:adae.sas")
+
+    assert any(finding["status"] == "NOT_EXECUTED" for finding in ctx.findings)
+    assert not any(edge["type"] in {"reads_variable", "writes_variable"} for edge in ctx.edges)
 
 
 def test_same_source_definition_binds_each_call_independently(tmp_path):
@@ -300,8 +345,8 @@ def test_same_source_definition_binds_each_call_independently(tmp_path):
             statement, ctx, events, index, load_macro_contracts([]), "program:adae.sas"
         )
 
-    call_reads = {(edge["from"], edge["to"]) for edge in ctx.edges if edge["type"] == "reads_dataset" and edge["from"].startswith("macrocall:")}
-    assert call_reads == {("macrocall:001", "dataset:sdtm.ae"), ("macrocall:002", "dataset:sdtm.lb")}
+    call_reads = {(edge["from"], edge["to"]) for edge in ctx.edges if edge["type"] == "reads_dataset" and edge["to"].startswith("macrocall:")}
+    assert call_reads == {("dataset:sdtm.ae", "macrocall:001"), ("dataset:sdtm.lb", "macrocall:002")}
     dependencies = {(edge["from"], edge["to"]) for edge in ctx.edges if edge["type"] == "depends_on"}
     assert {("dataset:work.a", "dataset:sdtm.ae"), ("dataset:work.b", "dataset:sdtm.lb")} <= dependencies
 

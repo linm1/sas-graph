@@ -5,6 +5,7 @@ design-md-contract-shape.md for the locked shape."""
 from pathlib import Path
 
 import conftest  # noqa: F401
+import pytest
 
 from sas_graph import macro_contracts as macro_contracts_module
 from sas_graph.config import ConfigResult
@@ -17,35 +18,65 @@ from sas_graph.macro_contracts import (
 from sas_graph.run_pipeline import _called_gm_macro_names
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-CONTRACTS = FIXTURES / "synthetic_multi_program" / "contracts"
+CONTRACTS = FIXTURES / "qc_adae" / "contracts"
+requires_qc_adae = pytest.mark.skipif(
+    not CONTRACTS.exists(),
+    reason="private qc_adae contract fixture is excluded from public staging",
+)
 
 
-def _write_contract_docs(directory):
-    """Two neutral `%gm` docs -- two are needed so a name filter can be shown
-    to exclude the macro that was not asked for."""
-    (directory / "gmApplyLabels.md").write_text(
-        "# gmApplyLabels\n\n## Purpose\n\nDoes a thing.\n\n## Parameters\n\n"
-        "| Parameter | Description | Acceptable Values | Default Value |\n"
-        "|---|---|---|---|\n"
-        "| inds | Input. | LIBRARY.DATASET | REQUIRED |\n",
-        encoding="utf-8",
+@requires_qc_adae
+def test_parses_gmmergesupp_purpose_parameters_and_examples():
+    contract = parse_macro_doc(CONTRACTS / "gmMergeSupp.md")
+
+    assert contract.macro == "gmMergeSupp"
+    assert not contract.errors
+    assert contract.purpose.startswith("This macro is designed to perform")
+    assert contract.parameters["dataMain"] == DocParameter(required=True)
+    assert contract.parameters["dataOut"] == DocParameter(required=True)
+    assert contract.parameters["selectType"] == DocParameter(required=False, default="ERROR")
+    assert any(example.startswith("%gmMergeSupp(dataMain=raw.ds") for example in contract.examples)
+
+
+@requires_qc_adae
+def test_gmmergesupp_examples_exact_tuple_excludes_nrstr_prose_reference():
+    """Regression for the `%nrstr(%%)gmMergeSUPP(....)` prose bug: that line
+    (in the Discussion's `Call execute` snippet) names the doc's own macro
+    but through an `%nrstr` escape, not a real call -- it must not appear.
+    Exact-equality here (not `any(...startswith...)`) is the point: the old
+    assertion style let both the %nrstr bug and paren corruption slip past."""
+    contract = parse_macro_doc(CONTRACTS / "gmMergeSupp.md")
+
+    assert contract.examples == (
+        "%gmMergeSupp( dataMain = ,dataSupp = ,dataOut = ,selectQnam = "
+        ",selectQnamName = ,varsNum = ,qnamBlank = ,selectType = ERROR )",
+        "%gmMergeSupp(dataMain=raw.ds, dataOut=dsPlus)",
+        "%gmMergeSupp(dataMain=raw.lbCh, dataSupp= raw.suppLb, dataOut=lbChPlus, selectType = ABORT)",
+        "%gmMergeSupp(dataMain=raw.lb, dataOut=lbPlus, varsNum =lbArRef@visDay)",
+        "%gmMergeSupp(dataMain=raw.lb, dataSupp=raw.supplb, dataOut=lb, qnamBlank=blank01 @ blank02)",
+        "%gmMergeSupp(dataMain=raw.ae, dataSupp=raw.suppae, dataOut=ae, selectQnam=Y, "
+        "selectQnamNames=(qnam in (“MEDDRA”, “MEDDRAVER”)))",
     )
-    (directory / "gmTrimNames.md").write_text(
-        "# gmTrimNames\n\n## Purpose\n\nDoes a thing.\n\n## Parameters\n\n"
-        "| Parameter | Description | Acceptable Values | Default Value |\n"
-        "|---|---|---|---|\n"
-        "| dataIn | Input. | LIBRARY.DATASET | REQUIRED |\n",
-        encoding="utf-8",
+
+
+@requires_qc_adae
+def test_gmtrimvarlen_examples_exact_tuple_stops_unbalanced_call_at_semicolon():
+    """Regression for the unbalanced-paren fallback bug: the whole Discussion
+    section is one giant line in this fixture, so falling back to "next
+    newline" swallowed every following example into one bogus entry. The
+    fixed fallback stops at the call's own `;` instead, so the two later
+    adsl examples still come back as their own separate entries."""
+    contract = parse_macro_doc(CONTRACTS / "gmTrimVarLen.md")
+
+    assert contract.examples == (
+        "%GmTrimVarLen( dataIn= ,excludeVars= ,selectType=ABORT ,splitChar=@ )",
+        "%gmTrimVarLen(dataIn = datasetName, excludeVars = "
+        "&_fixedLengthVars@datasetSpecificVar1@datasetSpecificVar2)",
+        "%gmTrimVarLen(dataIn = ie)",
+        "%gmTrimVarLen(dataIn = lb, excludeVars = .*id@((?<!^lb).)*;",
+        "%gmTrimVarLen(dataIn = adsl, excludeVars = usubjId#armCd, splitChar = #)",
+        "%gmTrimVarLen(dataIn = adsl, excludeVars = (?!(var1|var2)$).*)",
     )
-
-
-def test_fixture_contract_directory_loads_its_macro():
-    """The synthetic fixture's own contracts/ dir is a real, loadable index."""
-    index = load_macro_contracts([CONTRACTS])
-
-    contract = index.get("gmApplyLabels")
-    assert contract is not None
-    assert contract.parameters["inds"].required
 
 
 def test_extract_examples_excludes_a_different_macro_named_in_prose():
@@ -123,24 +154,30 @@ def test_repeated_contract_read_rejects_changed_bytes(monkeypatch, tmp_path):
     assert contract.purpose == "Original purpose text."
 
 
-def test_macro_name_case_preserved_but_lookup_is_case_insensitive(tmp_path):
-    """Heading casing differs from call-syntax casing -- the index still
-    finds it by any case, and preserves the heading's own casing."""
-    _write_contract_docs(tmp_path)
+@requires_qc_adae
+def test_parses_gmcompare_examples_spanning_multiple_lines():
+    contract = parse_macro_doc(CONTRACTS / "gmCompare.md")
 
-    index = load_macro_contracts([tmp_path])
+    assert contract.macro == "gmCompare"
+    assert contract.parameters["dataMain"] == DocParameter(required=True)
+    assert contract.parameters["libraryQC"] == DocParameter(required=True)
+    assert any("dataMain = main.ae" in example for example in contract.examples)
 
-    contract = index.get("GMTRIMNAMES")
+
+@requires_qc_adae
+def test_macro_name_case_preserved_but_lookup_is_case_insensitive():
+    """gmTrimVarLen.md: heading casing differs from call-syntax casing --
+    the index still finds it by any case."""
+    index = load_macro_contracts([CONTRACTS])
+
+    contract = index.get("GMTRIMVARLEN")
     assert contract is not None
-    assert contract.macro == "gmTrimNames"
+    assert contract.macro == "gmTrimVarLen"
     assert contract.parameters["dataIn"].required
 
 
-def test_unresolved_macro_has_no_contract(tmp_path):
-    _write_contract_docs(tmp_path)
-
-    index = load_macro_contracts([tmp_path])
-
+def test_unresolved_macro_has_no_contract():
+    index = load_macro_contracts([CONTRACTS])
     assert index.get("gm_missing") is None
 
 
@@ -183,45 +220,41 @@ def test_declared_root_that_does_not_exist_yields_empty_index():
     assert index.get("anything") is None
 
 
-def test_macro_names_filter_loads_only_matching_macros(tmp_path):
-    _write_contract_docs(tmp_path)
+@requires_qc_adae
+def test_macro_names_filter_loads_only_matching_macros():
+    index = load_macro_contracts([CONTRACTS], macro_names={"gmTrimVarLen"})
 
-    index = load_macro_contracts([tmp_path], macro_names={"gmTrimNames"})
+    assert index.get("gmTrimVarLen") is not None
+    assert "gmcompare" not in index.contracts
+    assert "gmmergesupp" not in index.contracts
+    assert "gmmapdsattrib" not in index.contracts
 
-    assert index.get("gmTrimNames") is not None
-    assert "gmapplylabels" not in index.contracts
 
+@requires_qc_adae
+def test_macro_names_filter_case_insensitive_filename_match():
+    index = load_macro_contracts([CONTRACTS], macro_names={"GMTRIMVARLEN"})
 
-def test_macro_names_filter_case_insensitive_filename_match(tmp_path):
-    _write_contract_docs(tmp_path)
-
-    index = load_macro_contracts([tmp_path], macro_names={"GMTRIMNAMES"})
-
-    contract = index.get("gmTrimNames")
+    contract = index.get("gmTrimVarLen")
     assert contract is not None
-    assert contract.macro == "gmTrimNames"
+    assert contract.macro == "gmTrimVarLen"
 
 
-def test_macro_names_filter_with_no_matching_file_yields_no_contract(tmp_path):
-    _write_contract_docs(tmp_path)
-
-    index = load_macro_contracts([tmp_path], macro_names={"gm_does_not_exist"})
+def test_macro_names_filter_with_no_matching_file_yields_no_contract():
+    index = load_macro_contracts([CONTRACTS], macro_names={"gm_does_not_exist"})
 
     assert index.get("gm_does_not_exist") is None
     assert index.contracts == {}
 
 
-def test_macro_names_filter_empty_preserves_full_scan_behavior(tmp_path):
-    """An empty (falsy) filter is not "match nothing" -- it must fall back to
-    the unfiltered full scan."""
-    _write_contract_docs(tmp_path)
+@requires_qc_adae
+def test_macro_names_filter_empty_preserves_full_scan_behavior():
+    filtered_full_scan = load_macro_contracts([CONTRACTS], macro_names=set())
+    unfiltered = load_macro_contracts([CONTRACTS])
 
-    filtered_full_scan = load_macro_contracts([tmp_path], macro_names=set())
-    unfiltered = load_macro_contracts([tmp_path])
-
-    assert set(filtered_full_scan.contracts) == set(unfiltered.contracts)
-    assert filtered_full_scan.get("gmApplyLabels") is not None
-    assert filtered_full_scan.get("gmTrimNames") is not None
+    assert filtered_full_scan.contracts == unfiltered.contracts
+    assert set(unfiltered.contracts) == {
+        "gmtrimvarlen", "gmcompare", "gmmergesupp", "gmmapdsattrib",
+    }
 
 
 def test_macro_names_filter_duplicate_filename_across_roots_still_collides(tmp_path):

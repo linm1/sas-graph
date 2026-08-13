@@ -417,16 +417,9 @@ def _walk(statements, events, findings, surviving, skipped_orders, os_fvars_base
         kind, condition_text = _classify_opener(statement.text)
 
         if kind is None:
-            if _OS_FVARS_RE.match(statement.text):
-                event, finding = _bind_os_fvars(statement, events, os_fvars_base)
-                if event is not None:
-                    events.append(event)
-                if finding is not None:
-                    findings.append(finding)
-                index += 1
-                continue
-
-            event, finding = _bind_statement(statement, events)
+            event, finding = _bind_os_fvars(statement, events, os_fvars_base)
+            if event is None and finding is None:
+                event, finding = _bind_statement(statement, events)
             if event is not None:
                 events.append(event)
             if finding is not None:

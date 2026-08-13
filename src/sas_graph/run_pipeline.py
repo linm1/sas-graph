@@ -271,7 +271,7 @@ def _process_file(
         block.statements[-1].statement_order: block for block in blocks
     }
     unattached_orders = {statement.statement_order for statement in unattached}
-    steps_before = {n["id"] for n in ctx.nodes if n["type"] == "Step"}
+    steps_before = {n["id"] for n in ctx.nodes if n["type"] in ("Step", "SqlBlock")}
 
     def apply_block(block):
         if block.kind == "DATA":
@@ -351,8 +351,22 @@ def _process_file(
 
     apply_inactive(runtime_comments, ctx)
 
+    # codex-review-class fix (found while building the variable-lineage
+    # acceptance fixture): `SqlBlock` never got a `contains_step` edge here,
+    # so `variable_lineage_walk._owning_program`'s
+    # `SqlStatement -> contains_sql_statement -> SqlBlock -> contains_step ->
+    # Program` reverse hop (wayfinder:
+    # variable-impact-reference-walk-algorithm) always resolved `program:
+    # null` for any reached `SqlStatement` -- not a walk bug, a missing edge.
+    # `SqlBlock` is not literally a `Step`, but it reuses the same edge type
+    # deliberately: it is a direct child of `container_node_id` exactly like
+    # a `Step` is, and the walk's reverse-hop lookup already treats
+    # `contains_step` as "whatever this Program/SetupFile directly parsed",
+    # not "specifically a Step" -- confirmed by reading
+    # `variable_lineage_walk.py` before this fix, not assumed.
     new_step_ids = [
-        n["id"] for n in ctx.nodes if n["type"] == "Step" and n["id"] not in steps_before
+        n["id"] for n in ctx.nodes
+        if n["type"] in ("Step", "SqlBlock") and n["id"] not in steps_before
     ]
     for step_id in new_step_ids:
         ctx.add_edge("contains_step", container_node_id, step_id, source=None)
@@ -407,7 +421,7 @@ def _report_read_but_never_written(ctx):
     first_read_edge = {}
     for edge in ctx.edges:
         if edge["type"] == "reads_dataset":
-            first_read_edge.setdefault(edge["to"], edge)
+            first_read_edge.setdefault(edge["from"], edge)
     dataset_labels = {
         node["id"]: node["label"] for node in ctx.nodes if node["type"] == "Dataset"
     }

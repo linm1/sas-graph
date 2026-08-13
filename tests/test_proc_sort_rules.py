@@ -25,7 +25,7 @@ def test_basic_sort_creates_reads_writes_depends_on_and_by_vars():
     rules_proc_sort.apply(blocks[0], ctx, events)
 
     edge_types = {(e["type"], e["from"], e["to"]) for e in ctx.edges}
-    assert ("reads_dataset", "step:001", "dataset:work.ae") in edge_types
+    assert ("reads_dataset", "dataset:work.ae", "step:001") in edge_types
     assert ("writes_dataset", "step:001", "dataset:work.ae_srt") in edge_types
     assert ("depends_on", "dataset:work.ae_srt", "dataset:work.ae") in edge_types
 
@@ -139,7 +139,7 @@ def test_unresolved_macro_variable_in_data_or_out_creates_unknown_dataset():
     unknown = [n for n in ctx.nodes if n["type"] == "UnknownDataset"]
     assert len(unknown) == 1
     assert any(f["status"] == "UNRESOLVED_MACRO_VARIABLE" for f in ctx.findings)
-    reads = {e["to"] for e in ctx.edges if e["type"] == "reads_dataset"}
+    reads = {e["from"] for e in ctx.edges if e["type"] == "reads_dataset"}
     assert reads == {unknown[0]["id"]}
 
 
@@ -157,7 +157,7 @@ def test_dupout_creates_writes_dataset_and_depends_on():
 
 
 def test_dupout_without_out_still_creates_writes_dataset():
-    """`dupout=` without `out=` still records a write."""
+    """qc_adae.sas:995's shape: `dupout=` present with no `out=`."""
     blocks, ctx, events = build(
         "proc sort data=work.adae dupout=work.adae_dups;\n  by usubjid;\nrun;\n"
     )

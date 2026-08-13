@@ -562,7 +562,7 @@ def test_os_fvars_composes_base_plus_colon_path_with_one_trailing_slash():
     assert [e.value for e in events if e.name == "_x"] == ["/base/a/b/c/"]
     assert findings == []
     assert skipped == set()
-    assert surviving == []
+    assert [s.text for s in surviving] == [s.text for s in result.statements]
 
 
 def test_os_fvars_projpath_resolves_when_type_bound_earlier():
@@ -587,9 +587,8 @@ def test_os_fvars_without_a_declared_base_binds_nothing():
     """Regression guard: an existing config with no os_fvars_base declared
     must behave exactly as it does today -- no binding, no finding."""
     result = split("%os_fvars(mvar=_x, projpath=a:b:c);\n")
-    surviving, events, findings, _ = walk_runtime(result.statements, os_fvars_base=None)
+    _, events, findings, _ = walk_runtime(result.statements, os_fvars_base=None)
 
-    assert surviving == []
     assert events == []
     assert findings == []
 

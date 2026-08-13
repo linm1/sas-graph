@@ -2,7 +2,7 @@
   "name": "sas-graph-explorer",
   "displayName": "SAS Graph Explorer",
   "description": "Interactive node-link viewer for sas-graph run output (graph.json), wired to SAS source in the editor.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "engines": {
     "vscode": "^1.85.0"
@@ -45,7 +45,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/**/*.test.js"
   },
   "devDependencies": {}
 }

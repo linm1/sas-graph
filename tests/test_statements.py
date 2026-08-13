@@ -293,7 +293,7 @@ def test_statement_source_matches_the_section_7_shape():
 
 
 def test_bare_macro_call_followed_by_another_call_splits_without_semicolons():
-    """Sibling bare calls have no `;` between them."""
+    """The real qc_adae setup.sas pattern: no `;` between sibling calls."""
     result = split_statements(
         "%os_fvars(mvar=_trim, projpath=a:b:trim)\n"
         "%os_fvars(mvar=_xpt, projpath=a:b:xpt)\n",

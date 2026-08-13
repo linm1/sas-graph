@@ -94,11 +94,6 @@ def _flow_edges(graph, drawn):
         if source not in drawn or target not in drawn:
             continue
 
-        # reads_dataset points step -> dataset in the graph, but the diagram
-        # reads left to right as dataset -> step, so flip it.
-        if edge_type == "reads_dataset":
-            source, target = target, source
-
         yield {**edge, "from": source, "to": target}
 
 

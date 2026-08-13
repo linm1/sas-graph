@@ -45,18 +45,8 @@ def is_inside(path, roots):
     """True when `path` is contained by any allowed root.
 
     Both sides must already be resolved (`..` and symlinks gone) --
-    `relative_to` compares whole path components, which is what makes
+    `is_relative_to` compares whole path components, which is what makes
     `/study/adae-evil` correctly fail against `/study/adae`; a `startswith`
-    check would accept it. `relative_to` is used instead of
-    `Path.is_relative_to` so the package remains compatible with Python 3.8.
+    check would accept it.
     """
-    return any(path == root or _is_relative_to(path, root) for root in roots)
-
-
-def _is_relative_to(path, root):
-    """Python 3.8-compatible equivalent of `Path.is_relative_to`."""
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
+    return any(path == root or path.is_relative_to(root) for root in roots)

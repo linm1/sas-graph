@@ -50,6 +50,22 @@ test("implemented_by propagates distance", () => {
   assert.equal(distances.get("b"), 1);
 });
 
+test("a Variable reaches its reading SqlStatement and connected Dataset", () => {
+  const nodes = [
+    node("variable:work.a.flag", "Variable"),
+    node("sqlstatement:001", "SqlStatement"),
+    node("dataset:work.a", "Dataset"),
+  ];
+  const edges = [
+    edge("e1", "reads_variable", "variable:work.a.flag", "sqlstatement:001"),
+    edge("e2", "reads_dataset", "dataset:work.a", "sqlstatement:001"),
+  ];
+
+  const { distances } = computeHopDistances(nodes, edges, ["variable:work.a.flag"], 5);
+  assert.equal(distances.get("sqlstatement:001"), 1);
+  assert.equal(distances.get("dataset:work.a"), 2);
+});
+
 test("external-file import and export edges propagate lineage distance", () => {
   const nodes = [
     node("externalfile:/data/raw/lookup.xlsx", "ExternalFile"),
