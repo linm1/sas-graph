@@ -41,6 +41,14 @@ def prohibited_reason(path):
     return None
 
 
+def _is_relative_to(path, root):
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 def is_inside(path, roots):
     """True when `path` is contained by any allowed root.
 
@@ -49,4 +57,4 @@ def is_inside(path, roots):
     `/study/adae-evil` correctly fail against `/study/adae`; a `startswith`
     check would accept it.
     """
-    return any(path == root or path.is_relative_to(root) for root in roots)
+    return any(path == root or _is_relative_to(path, root) for root in roots)

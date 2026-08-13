@@ -2,7 +2,7 @@
 
 Source-only static dependency graph parser for SAS task programs. Reads SAS
 source, emits `graph.json`/`graph.mmd`/`findings.md`. Never executes SAS,
-never opens a dataset (`sas_graph_dev_plan.md` section 2, non-negotiable).
+never opens a dataset (non-negotiable; see design rationale below).
 
 ## Architecture (as built, not aspirational)
 
