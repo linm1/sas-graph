@@ -2,65 +2,15 @@
 "use strict";
 
 const vscode = require("vscode");
-const fs = require("node:fs");
-const path = require("node:path");
 const { GraphSidebarProvider } = require("./webviewPanel.js");
 const { lookupInnermostNode } = require("./lineIndex.js");
-const { extractOutputDir, pickLatestRun } = require("./projectConfig.js");
+const { resolveGraphJsonPath } = require("./projectConfig.js");
 const { loadGraphFromPath } = require("./graphLoader.js");
-
-/**
- * Ticket 09: locate the current workspace's project.yaml, resolve its
- * output_dir, and find the most recent run's graph.json under
- * output_dir/runs/. Answer to Further Notes #3: workspace-root project.yaml
- * scan (not a VS Code setting) — see projectConfig.js's doc comment.
- *
- * Falls back to ticket 03's manual file picker only when a workspace is
- * open but has no project.yaml at its root and the user explicitly wants
- * to point at an arbitrary graph.json anyway; project.yaml-present-but-
- * misconfigured cases surface a specific error instead (never a blank
- * webview, never a silent fallback), per the ticket's acceptance criteria.
- * @returns {{ path?: string, error?: string }}
- */
-function resolveGraphJsonPath() {
-  const workspaceFolders = vscode.workspace.workspaceFolders;
-  if (!workspaceFolders || !workspaceFolders.length) {
-    return { error: "SAS Graph: no workspace folder is open. Open the folder containing project.yaml first." };
-  }
-
-  const workspaceRoot = workspaceFolders[0].uri.fsPath;
-  const projectYamlPath = path.join(workspaceRoot, "project.yaml");
-  if (!fs.existsSync(projectYamlPath)) {
-    return { error: `SAS Graph: no project.yaml found at the workspace root (${workspaceRoot}). Run sas-graph in a workspace with a project.yaml, or choose one manually.` };
-  }
-
-  const yamlText = fs.readFileSync(projectYamlPath, "utf-8");
-  const outputDir = extractOutputDir(yamlText);
-  if (!outputDir) {
-    return { error: `SAS Graph: project.yaml at ${projectYamlPath} does not declare output_dir.` };
-  }
-
-  const runsDir = path.join(workspaceRoot, outputDir, "runs");
-  let runDirNames = [];
-  try {
-    runDirNames = fs.readdirSync(runsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    runDirNames = [];
-  }
-
-  const latestRun = pickLatestRun(runDirNames);
-  if (!latestRun) {
-    return { error: `SAS Graph: no runs found under ${runsDir}. Run "sas-graph run" first, then try again.` };
-  }
-
-  const graphJsonPath = path.join(runsDir, latestRun, "graph.json");
-  if (!fs.existsSync(graphJsonPath)) {
-    return { error: `SAS Graph: run ${latestRun} has no graph.json at ${graphJsonPath}.` };
-  }
-  return { path: graphJsonPath };
-}
+const {
+  SasGraphSearchTool,
+  SasGraphTraceLineageTool,
+  SasGraphAnalyzeImpactTool,
+} = require("./languageModelTools.js");
 
 /**
  * Ticket 03's original manual-selection path, kept as a second command for
@@ -129,6 +79,12 @@ function activate(context) {
     const graphPath = await pickGraphJsonManually();
     if (graphPath) showGraphFromPath(graphPath);
   });
+
+  context.subscriptions.push(
+    vscode.lm.registerTool("sas-graph_search", new SasGraphSearchTool()),
+    vscode.lm.registerTool("sas-graph_traceLineage", new SasGraphTraceLineageTool()),
+    vscode.lm.registerTool("sas-graph_analyzeImpact", new SasGraphAnalyzeImpactTool()),
+  );
 
   // Cursor-to-node sync (ticket 06): on every selection change in the
   // active editor, look up the innermost allowlisted covering node and

@@ -5,16 +5,29 @@
   "version": "0.2.0",
   "private": true,
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.95.0"
   },
   "categories": ["Visualization", "Other"],
   "main": "./src/extension.js",
   "activationEvents": [
     "onView:sasGraph.sidebar",
     "onCommand:sasGraph.openGraphView",
-    "onCommand:sasGraph.openGraphViewManual"
+    "onCommand:sasGraph.openGraphViewManual",
+    "onLanguageModelTool:sas-graph_search",
+    "onLanguageModelTool:sas-graph_traceLineage",
+    "onLanguageModelTool:sas-graph_analyzeImpact"
   ],
   "contributes": {
+    "configuration": {
+      "title": "SAS Graph",
+      "properties": {
+        "sasGraph.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Path to a Python interpreter with sas-graph installed. Used both by the graph tools and by SAS Graph: Re-run and Refresh."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -42,10 +55,72 @@
         "command": "sasGraph.openGraphViewManual",
         "title": "SAS Graph: Open Graph View (choose graph.json manually)"
       }
+    ],
+    "languageModelTools": [
+      {
+        "name": "sas-graph_search",
+        "displayName": "SAS Graph Search",
+        "toolReferenceName": "sasGraphSearch",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Search the current SAS program's dependency graph (from the latest sas-graph run) for a node by name or type, case-insensitive substring match. Returns matching nodes' id, type, label, and source location. Call this first to get a node id for sas-graph_traceLineage or a variable id for sas-graph_analyzeImpact.",
+        "userDescription": "Search the SAS dependency graph for a dataset, step, macro, or variable by name.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Substring to match against node label and type."
+            }
+          },
+          "required": ["query"]
+        }
+      },
+      {
+        "name": "sas-graph_traceLineage",
+        "displayName": "SAS Graph Trace Lineage",
+        "toolReferenceName": "sasGraphTraceLineage",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Trace structural lineage for a Dataset, Step, or SqlStatement node: what produced it (upstream) and/or what it feeds into (downstream), over reads_dataset/writes_dataset edges. Direction defaults to both. Returns reached nodes split into upstream_nodes/downstream_nodes plus the edges traversed. Get a node id from sas-graph_search first.",
+        "userDescription": "Trace what a dataset or step came from, or what it feeds into.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": "string",
+              "description": "Full node id, e.g. dataset:sdtm.ae or step:007."
+            },
+            "direction": {
+              "type": "string",
+              "enum": ["upstream", "downstream", "both"],
+              "description": "Defaults to both if omitted."
+            }
+          },
+          "required": ["node"]
+        }
+      },
+      {
+        "name": "sas-graph_analyzeImpact",
+        "displayName": "SAS Graph Analyze Impact",
+        "toolReferenceName": "sasGraphAnalyzeImpact",
+        "canBeReferencedInPrompt": true,
+        "modelDescription": "Walk the downstream blast radius of a single Variable node: every Step/SqlStatement and derived variable it reaches through reads_variable/writes_variable edges, plus condition/value facts along the way. Variable-level only — for Dataset/Step-level downstream impact use sas-graph_traceLineage with direction=downstream. Get a variable id from sas-graph_search first.",
+        "userDescription": "See what a variable's value affects downstream.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "variable": {
+              "type": "string",
+              "description": "Full variable node id, e.g. variable:sdtm.ae.aeterm."
+            }
+          },
+          "required": ["variable"]
+        }
+      }
     ]
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage --test-isolation=none test/*.test.js"
   },
   "devDependencies": {}
 }

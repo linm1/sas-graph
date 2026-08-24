@@ -1,6 +1,9 @@
 // @ts-check
 "use strict";
 
+const path = require("node:path");
+const fs = require("node:fs");
+
 // Ticket 09: locate graph.json from a CLI run.
 //
 // Answer to Further Notes #3 (concrete, not left open, per the ticket):
@@ -46,6 +49,18 @@ function extractOutputDir(yamlText) {
 }
 
 /**
+ * Resolve the run directory from a workspace root and project output_dir.
+ * Absolute output_dir values must stay absolute; relative values are rooted
+ * at the workspace, matching the Python config loader.
+ * @param {string} workspaceRoot
+ * @param {string} outputDir
+ * @returns {string}
+ */
+function resolveRunsDir(workspaceRoot, outputDir) {
+  return path.resolve(workspaceRoot, outputDir, "runs");
+}
+
+/**
  * Pick the most recent run directory name from a list of run directory
  * names under `output_dir/runs/`. Lexicographic descending sort on the
  * `YYYYMMDDTHHMMSSZ-<hex>` run_id format is chronological — see module doc
@@ -58,6 +73,51 @@ function pickLatestRun(runDirNames) {
   return [...runDirNames].sort().at(-1);
 }
 
+/**
+ * Locate the latest graph.json from the current workspace's project.yaml.
+ * @returns {{ path?: string, error?: string }}
+ */
+function resolveGraphJsonPath() {
+  const vscode = require("vscode");
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (!workspaceFolders || !workspaceFolders.length) {
+    return { error: "SAS Graph: no workspace folder is open. Open the folder containing project.yaml first." };
+  }
+
+  const workspaceRoot = workspaceFolders[0].uri.fsPath;
+  const projectYamlPath = path.join(workspaceRoot, "project.yaml");
+  if (!fs.existsSync(projectYamlPath)) {
+    return { error: `SAS Graph: no project.yaml found at the workspace root (${workspaceRoot}). Run sas-graph in a workspace with a project.yaml, or choose one manually.` };
+  }
+
+  const yamlText = fs.readFileSync(projectYamlPath, "utf-8");
+  const outputDir = extractOutputDir(yamlText);
+  if (!outputDir) {
+    return { error: `SAS Graph: project.yaml at ${projectYamlPath} does not declare output_dir.` };
+  }
+
+  const runsDir = resolveRunsDir(workspaceRoot, outputDir);
+  let runDirNames = [];
+  try {
+    runDirNames = fs.readdirSync(runsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    runDirNames = [];
+  }
+
+  const latestRun = pickLatestRun(runDirNames);
+  if (!latestRun) {
+    return { error: `SAS Graph: no runs found under ${runsDir}. Run "sas-graph run" first, then try again.` };
+  }
+
+  const graphJsonPath = path.join(runsDir, latestRun, "graph.json");
+  if (!fs.existsSync(graphJsonPath)) {
+    return { error: `SAS Graph: run ${latestRun} has no graph.json at ${graphJsonPath}.` };
+  }
+  return { path: graphJsonPath };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { extractOutputDir, pickLatestRun };
+  module.exports = { extractOutputDir, pickLatestRun, resolveRunsDir, resolveGraphJsonPath };
 }

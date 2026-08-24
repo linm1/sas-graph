@@ -11,12 +11,14 @@ Exit codes: 0 success, 1 validation/run FAILED, 2 argparse usage error.
 
 import argparse
 import dataclasses
+import json
 import shutil
 import sys
 from pathlib import Path
 
 from .config import load_config
 from .graph_io import load_graph, save_graph
+from .graph_queries import analyze_impact, search_nodes, trace_lineage
 from .manifest import build_manifest, create_run_dir, save_manifest
 from .renderer_findings import render as render_findings
 from .renderer_mermaid import render as render_mermaid
@@ -35,6 +37,46 @@ def _render(graph_path, out_path, renderer):
     target.write_text(text, encoding="utf-8")
     print(f"wrote {target}")
     return 0
+
+
+def _query(graph_path, command, query):
+    """Load a completed graph, run a pure query, and emit bare JSON."""
+    try:
+        graph = load_graph(graph_path)
+        if graph.get("run_status") == "FAILED":
+            raise ValueError("graph run_status is FAILED; query a completed graph")
+        result = query(graph)
+    except Exception as exc:  # noqa: BLE001  (CLI boundary must never leak a traceback)
+        message = str(exc).strip() or exc.__class__.__name__
+        sys.stderr.write(f"{command}: {message}\n")
+        return 1
+
+    sys.stdout.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return 0
+
+
+def _query_search(graph_path, query):
+    return _query(
+        graph_path,
+        "query-search",
+        lambda graph: search_nodes(graph, query),
+    )
+
+
+def _query_lineage(graph_path, node, direction):
+    return _query(
+        graph_path,
+        "query-lineage",
+        lambda graph: trace_lineage(graph, node, direction),
+    )
+
+
+def _query_impact(graph_path, variable):
+    return _query(
+        graph_path,
+        "query-impact",
+        lambda graph: analyze_impact(graph, variable),
+    )
 
 
 def _write_manifest(result):
@@ -211,6 +253,21 @@ def build_parser():
     findings.add_argument("--graph", required=True)
     findings.add_argument("--out")
 
+    query_search = sub.add_parser("query-search")
+    query_search.add_argument("--graph", required=True)
+    query_search.add_argument("--query", required=True)
+
+    query_lineage = sub.add_parser("query-lineage")
+    query_lineage.add_argument("--graph", required=True)
+    query_lineage.add_argument("--node", required=True)
+    query_lineage.add_argument(
+        "--direction", choices=("upstream", "downstream", "both"), default="both"
+    )
+
+    query_impact = sub.add_parser("query-impact")
+    query_impact.add_argument("--graph", required=True)
+    query_impact.add_argument("--variable", required=True)
+
     return parser
 
 
@@ -225,6 +282,15 @@ def main(argv=None):
 
     if args.command == "render-mermaid":
         return _render(args.graph, args.out, render_mermaid)
+
+    if args.command == "query-search":
+        return _query_search(args.graph, args.query)
+
+    if args.command == "query-lineage":
+        return _query_lineage(args.graph, args.node, args.direction)
+
+    if args.command == "query-impact":
+        return _query_impact(args.graph, args.variable)
 
     return _render(args.graph, args.out, render_findings)
 
