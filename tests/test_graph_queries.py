@@ -48,27 +48,30 @@ def test_search_matches_label_and_type_case_insensitively_with_curated_source():
 
     result = search_nodes(graph, "STEP")
 
-    assert result == {
-        "query": "STEP",
-        "matches": [
-            {
-                "id": "step:001",
-                "type": "Step",
-                "label": "build a",
-                "source": {"file": "main.sas", "line_start": 1, "line_end": 2},
-            },
-            {
-                "id": "step:002",
-                "type": "Step",
-                "label": "build b",
-                "source": {"file": "main.sas", "line_start": 3, "line_end": 4},
-            },
-        ],
-    }
+    assert result["query"] == "STEP"
+    assert result["matches"] == [
+        {
+            "id": "step:001",
+            "type": "Step",
+            "label": "build a",
+            "source": {"file": "main.sas", "line_start": 1, "line_end": 2},
+        },
+        {
+            "id": "step:002",
+            "type": "Step",
+            "label": "build b",
+            "source": {"file": "main.sas", "line_start": 3, "line_end": 4},
+        },
+    ]
+    assert result["truncated"] is False
+    assert result["visited_count"] == len(_graph()["nodes"])
 
 
 def test_search_returns_empty_success_for_no_match():
-    assert search_nodes(_graph(), "missing") == {"query": "missing", "matches": []}
+    result = search_nodes(_graph(), "missing")
+    assert result["query"] == "missing"
+    assert result["matches"] == []
+    assert result["truncated"] is False
 
 
 def test_trace_lineage_from_dataset_both_directions_is_unbounded_and_cycle_safe():
@@ -148,12 +151,11 @@ def test_analyze_impact_accepts_unknown_variable_start_ids():
 
     result = analyze_impact(graph, "unknownvariable:flag@12")
 
-    assert result == {
-        "start": "unknownvariable:flag@12",
-        "reached_variables": ["unknownvariable:flag@12"],
-        "reached_operations": [],
-        "category_facts": [],
-    }
+    assert result["start"] == "unknownvariable:flag@12"
+    assert result["reached_variables"] == ["unknownvariable:flag@12"]
+    assert result["reached_operations"] == []
+    assert result["category_facts"] == []
+    assert result["truncated"] is False
 
 
 def test_trace_lineage_handles_branch_merge_and_cycle_without_duplicates():

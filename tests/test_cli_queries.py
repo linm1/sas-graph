@@ -57,10 +57,12 @@ def test_query_search_prints_bare_json(capsys, tmp_path):
 
     assert main(["query-search", "--graph", str(graph), "--query", "STEP"]) == 0
 
-    assert json.loads(capsys.readouterr().out) == {
-        "query": "STEP",
-        "matches": [{"id": "step:001", "type": "Step", "label": "derive", "source": None}],
-    }
+    result = json.loads(capsys.readouterr().out)
+    assert result["query"] == "STEP"
+    assert result["matches"] == [
+        {"id": "step:001", "type": "Step", "label": "derive", "source": None}
+    ]
+    assert result["truncated"] is False
 
 
 def test_query_impact_serializes_existing_walk_shape(capsys, tmp_path):
