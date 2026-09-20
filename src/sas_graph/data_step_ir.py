@@ -28,10 +28,9 @@ _COMPARISON_RE = re.compile(
 )
 _COMPARISON_OPERATOR_ALIASES = {"=>": ">=", "=<": "<="}
 _BARE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$")
+_MAX_PARENTHESIS_DEPTH = 100
 
 _BINARY_PRECEDENCE = {
-    "or": 1,
-    "and": 2,
     "=": 3,
     "eq": 3,
     "ne": 3,
@@ -157,6 +156,7 @@ class _ExpressionParser:
         self.span = span
         self.literal_value = literal_value
         self.index = 0
+        self.parenthesis_depth = 0
 
     def parse(self):
         if not self.tokens:
@@ -203,16 +203,28 @@ class _ExpressionParser:
         kind, token = self.tokens[self.index]
         if kind == "(":
             self.index += 1
-            expression = self._parse_binary(1)
-            if self.index >= len(self.tokens) or self.tokens[self.index][0] != ")":
-                raise _UnsupportedExpression
-            self.index += 1
-            return expression
+            self.parenthesis_depth += 1
+            try:
+                if self.parenthesis_depth > _MAX_PARENTHESIS_DEPTH:
+                    raise _UnsupportedExpression
+                expression = self._parse_binary(1)
+                if (
+                    self.index >= len(self.tokens)
+                    or self.tokens[self.index][0] != ")"
+                ):
+                    raise _UnsupportedExpression
+                self.index += 1
+                return expression
+            finally:
+                self.parenthesis_depth -= 1
         if kind == "atom":
             self.index += 1
             if token.lower().endswith("n"):
                 return _variable(token, self.unresolved_names, self.span)
-            return IRLiteral(self.literal_value(token), self.span)
+            value = self.literal_value(token)
+            if value is None:
+                raise _UnsupportedExpression
+            return IRLiteral(value, self.span)
         if kind == "number":
             self.index += 1
             return IRLiteral(token, self.span)
