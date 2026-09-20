@@ -134,6 +134,7 @@ def synthetic_graph(node_count=10000, seed=1337):
 
     rng = random.Random(seed)
     chain_length = (node_count - 1) // 3
+    fanout = 4
     nodes = []
     for index in range(chain_length):
         nodes.extend(
@@ -159,37 +160,52 @@ def synthetic_graph(node_count=10000, seed=1337):
         index = len(nodes)
         nodes.append(_node(f"program:{index:05d}", "Program"))
 
+    downstream_targets = {}
+    for index in range(chain_length - 1):
+        target_count = min(fanout, chain_length - index - 1)
+        downstream_targets[index] = rng.sample(
+            range(index + 1, chain_length), target_count
+        )
+
     edges = []
     for index in range(chain_length - 1):
-        base = index * 4
-        edges.extend(
-            (
-                _edge(
-                    f"edge:{base:05d}",
-                    "reads_dataset",
-                    f"dataset:{index:05d}",
-                    f"step:{index:05d}",
-                ),
-                _edge(
-                    f"edge:{base + 1:05d}",
-                    "writes_dataset",
-                    f"step:{index:05d}",
-                    f"dataset:{index + 1:05d}",
-                ),
-                _edge(
-                    f"edge:{base + 2:05d}",
-                    "reads_variable",
-                    f"variable:{index:05d}",
-                    f"step:{index:05d}",
-                ),
-                _edge(
-                    f"edge:{base + 3:05d}",
-                    "writes_variable",
-                    f"step:{index:05d}",
-                    f"variable:{index + 1:05d}",
-                ),
+        base = index * (2 * fanout + 2)
+        edges.append(
+            _edge(
+                f"edge:{base:05d}",
+                "reads_dataset",
+                f"dataset:{index:05d}",
+                f"step:{index:05d}",
             )
         )
+        for offset, target_index in enumerate(downstream_targets[index], start=1):
+            edges.append(
+                _edge(
+                    f"edge:{base + offset:05d}",
+                    "writes_dataset",
+                    f"step:{index:05d}",
+                    f"dataset:{target_index:05d}",
+                )
+            )
+        edges.append(
+            _edge(
+                f"edge:{base + fanout + 1:05d}",
+                "reads_variable",
+                f"variable:{index:05d}",
+                f"step:{index:05d}",
+            )
+        )
+        for offset, target_index in enumerate(
+            downstream_targets[index], start=fanout + 2
+        ):
+            edges.append(
+                _edge(
+                    f"edge:{base + offset:05d}",
+                    "writes_variable",
+                    f"step:{index:05d}",
+                    f"variable:{target_index:05d}",
+                )
+            )
     return {"nodes": nodes, "edges": edges, "findings": []}
 
 
@@ -327,6 +343,61 @@ def test_search_and_impact_include_bounded_metadata():
     assert {fact["edge"] for fact in impact_result["category_facts"]} == {"edge:1"}
 
 
+def test_query_limits_bound_wide_graph_results_and_frontier():
+    graph = synthetic_graph(node_count=300, seed=2026)
+    index = GraphIndex(graph)
+    limit = 5
+
+    lineage_result = trace_lineage(
+        graph,
+        "dataset:00000",
+        "downstream",
+        depth=20,
+        limit=limit,
+        index=index,
+    )
+    assert len(lineage_result["downstream_nodes"]) == limit
+    assert lineage_result["limit_hit"] is True
+    lineage_returned_ids = {
+        lineage_result["start"],
+        *(node["id"] for node in lineage_result["downstream_nodes"]),
+    }
+    assert set(lineage_result["continuation"]) - lineage_returned_ids
+    assert all(
+        {edge["from"], edge["to"]} <= lineage_returned_ids
+        for edge in lineage_result["edges"]
+    )
+
+    impact_result = analyze_impact(
+        graph,
+        "variable:00000",
+        depth=20,
+        limit=limit,
+        index=index,
+    )
+    assert (
+        len(impact_result["reached_variables"])
+        - 1
+        + len(impact_result["reached_operations"])
+        == limit
+    )
+    assert impact_result["limit_hit"] is True
+    impact_returned_ids = set(impact_result["reached_variables"]) | {
+        operation["id"] for operation in impact_result["reached_operations"]
+    }
+    assert set(impact_result["continuation"]) - impact_returned_ids
+    edge_by_id = {edge["id"]: edge for edge in graph["edges"]}
+    assert all(
+        {
+            edge_by_id[fact["edge"]]["from"],
+            edge_by_id[fact["edge"]]["to"],
+            fact["on"],
+        }
+        <= impact_returned_ids
+        for fact in impact_result["category_facts"]
+    )
+
+
 def test_default_lineage_depth_counts_dataset_hops_on_basic_adae_fixture():
     result = trace_lineage(_basic_adae_graph(), "dataset:adam.adae", "both")
 
@@ -447,14 +518,34 @@ def test_bench_10k_graph_p95_per_primitive():
     graph = synthetic_graph()
     index = GraphIndex(graph)
     queries = {
-        "search_nodes": lambda: search_nodes(graph, "dataset", index=index),
+        "search_nodes": lambda: search_nodes(
+            graph, "dataset", limit=5000, index=index
+        ),
         "trace_lineage": lambda: trace_lineage(
-            graph, "dataset:00000", "downstream", index=index
+            graph,
+            "dataset:00000",
+            "downstream",
+            depth=20,
+            limit=5000,
+            index=index,
         ),
         "analyze_impact": lambda: analyze_impact(
-            graph, "variable:00000", index=index
+            graph, "variable:00000", depth=20, limit=5000, index=index
         ),
     }
+    warm_results = {name: query() for name, query in queries.items()}
+    reached_counts = {
+        "search_nodes": len(warm_results["search_nodes"]["matches"]),
+        "trace_lineage": len(warm_results["trace_lineage"]["downstream_nodes"]),
+        "analyze_impact": (
+            len(warm_results["analyze_impact"]["reached_variables"])
+            - 1
+            + len(warm_results["analyze_impact"]["reached_operations"])
+        ),
+    }
+    assert reached_counts["trace_lineage"] >= 1000
+    assert reached_counts["analyze_impact"] >= 1000
+
     sample_count = 30
     gc.collect()
     cold_samples = []
@@ -476,7 +567,7 @@ def test_bench_10k_graph_p95_per_primitive():
         warm_p95 = _p95_ms(samples)
         print(
             f"benchmark {name} warm_p95_ms={warm_p95:.3f} "
-            f"cold_p95_ms={cold_p95:.3f}"
+            f"cold_p95_ms={cold_p95:.3f} reached={reached_counts[name]}"
         )
         assert warm_p95 < 200
 
@@ -490,6 +581,7 @@ def demo():
         test_query_bounds_defaults_apply_and_report_truncation,
         test_query_bounds_reject_values_above_ticket_ceilings,
         test_search_and_impact_include_bounded_metadata,
+        test_query_limits_bound_wide_graph_results_and_frontier,
         test_existing_query_keys_survive_on_real_pipeline_graph,
     ]
     for test in tests:
