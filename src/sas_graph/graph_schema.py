@@ -148,6 +148,9 @@ EDGE_TYPES = frozenset(EDGE_ENDPOINTS)
 
 def normalize_graph(graph):
     """Up-convert one loaded 0.2.0 graph to the 0.3.0 envelope."""
+    from .evidence import EvidenceKind, ResolutionStatus
+    from .graph_model import GraphContext
+
     if not isinstance(graph, dict):
         raise TypeError("graph must be a dictionary")
     if graph.get("schema_version") != "0.2.0":
@@ -155,10 +158,25 @@ def normalize_graph(graph):
 
     normalized = dict(graph)
     normalized["schema_version"] = "0.3.0"
-    normalized["schema"] = {
-        "producer": "sas-graph",
-        "producer_version": "0.2.0",
-        "capabilities": ["dataset_lineage", "variable_lineage"],
-    }
-    # PR 3 will attach UNKNOWN/NOT_ATTEMPTED evidence to pre-evidence edges.
+    schema = dict(graph.get("schema", {}))
+    schema["producer"] = "sas-graph"
+    schema["producer_version"] = "0.2.0"
+    capabilities = list(
+        schema.get("capabilities", ["dataset_lineage", "variable_lineage"])
+    )
+    if "evidence_v1" not in capabilities:
+        capabilities.append("evidence_v1")
+    schema["capabilities"] = capabilities
+    normalized["schema"] = schema
+    normalized["edges"] = []
+    for edge in graph.get("edges", []):
+        normalized_edge = dict(edge)
+        if "evidence" not in normalized_edge:
+            normalized_edge["evidence"] = GraphContext.make_evidence(
+                EvidenceKind.UNKNOWN,
+                ResolutionStatus.NOT_ATTEMPTED,
+                "normalize_graph",
+                normalized_edge.get("source"),
+            )
+        normalized["edges"].append(normalized_edge)
     return normalized

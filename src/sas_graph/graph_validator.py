@@ -5,6 +5,7 @@ node-id uniqueness, edge referential integrity, registered types, and legal
 edge endpoint pairs.
 """
 
+from .evidence import EVIDENCE_KINDS, RESOLUTION_STATUSES, EvidenceKind
 from .graph_io import SUPPORTED_SCHEMA_VERSIONS
 from .graph_schema import EDGE_ENDPOINTS, EDGE_TYPES, NODE_TYPES
 
@@ -126,6 +127,43 @@ def validate_graph(graph):
                         _reference(edge_id), key
                     )
                 )
+
+        if "evidence" in edge:
+            evidence = edge["evidence"]
+            if not isinstance(evidence, dict):
+                problems.append(
+                    "edge {0} has evidence that must be a dictionary; found {1}".format(
+                        _reference(edge_id), type(evidence).__name__
+                    )
+                )
+            else:
+                kind = evidence.get("kind")
+                if not isinstance(kind, str) or kind not in EVIDENCE_KINDS:
+                    problems.append(
+                        "edge {0} has unknown evidence kind {1}".format(
+                            _reference(edge_id), _reference(kind)
+                        )
+                    )
+
+                resolution = evidence.get("resolution")
+                if (
+                    not isinstance(resolution, str)
+                    or resolution not in RESOLUTION_STATUSES
+                ):
+                    problems.append(
+                        "edge {0} has unknown evidence resolution {1}".format(
+                            _reference(edge_id), _reference(resolution)
+                        )
+                    )
+
+                if kind == EvidenceKind.UNKNOWN and evidence.get("confidence") is not None:
+                    problems.append(
+                        "edge {0} with evidence kind 'UNKNOWN' must have "
+                        "confidence None; found {1}".format(
+                            _reference(edge_id),
+                            _reference(evidence.get("confidence")),
+                        )
+                    )
 
         edge_type = edge.get("type")
         if "type" in edge:

@@ -5,7 +5,8 @@
     "producer_version": "0.2.0",
     "capabilities": [
       "dataset_lineage",
-      "variable_lineage"
+      "variable_lineage",
+      "evidence_v1"
     ]
   },
   "run_id": "reference-0_3_0",
@@ -72,61 +73,161 @@
       "id": "edge:001",
       "type": "contains_step",
       "from": "program:000_main.sas",
-      "to": "step:001"
+      "to": "step:001",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     },
     {
       "id": "edge:002",
       "type": "reads_dataset",
       "from": "dataset:sdtm.input",
-      "to": "step:001"
+      "to": "step:001",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     },
     {
       "id": "edge:003",
       "type": "writes_dataset",
       "from": "step:001",
-      "to": "dataset:work.output"
+      "to": "dataset:work.output",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     },
     {
       "id": "edge:004",
       "type": "depends_on",
       "from": "dataset:work.output",
-      "to": "dataset:sdtm.input"
+      "to": "dataset:sdtm.input",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     },
     {
       "id": "edge:005",
       "type": "reads_variable",
       "from": "variable:work.output.id",
-      "to": "step:001"
+      "to": "step:001",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     },
     {
       "id": "edge:006",
       "type": "writes_variable",
       "from": "step:001",
-      "to": "variable:work.output.id"
+      "to": "variable:work.output.id",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     },
     {
       "id": "edge:007",
       "type": "calls_macro",
       "from": "program:000_main.sas",
-      "to": "macrocall:001"
+      "to": "macrocall:001",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     },
     {
       "id": "edge:008",
       "type": "passes_parameter",
       "from": "macrocall:001",
-      "to": "macroparam:001:inds"
+      "to": "macroparam:001:inds",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     },
     {
       "id": "edge:009",
       "type": "resolves_to",
       "from": "macroparam:001:inds",
-      "to": "unknown_dataset:runtime"
+      "to": "unknown_dataset:runtime",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     },
     {
       "id": "edge:010",
       "type": "defines_macro_variable",
       "from": "setup:setup.sas",
-      "to": "macrovar:domain@1"
+      "to": "macrovar:domain@1",
+      "evidence": {
+        "kind": "UNKNOWN",
+        "extractor": "reference_graph",
+        "extractor_version": "1",
+        "source_refs": [],
+        "derivation_refs": [],
+        "resolution": "NOT_ATTEMPTED",
+        "confidence": null,
+        "limitations": []
+      }
     }
   ],
   "findings": []

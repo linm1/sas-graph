@@ -19,9 +19,10 @@ because LIBNAME and PROC SORT are structural evidence, not macro
 substitution.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from . import SCHEMA_VERSION
+from .evidence import Evidence, EvidenceKind, ResolutionStatus, SourceRef
 
 
 def dataset_id(name):
@@ -178,10 +179,67 @@ class GraphContext:
 
     # --- edges -----------------------------------------------------------
 
-    def add_edge(self, edge_type, from_id, to_id, source, **extra):
+    @staticmethod
+    def make_evidence(
+        kind,
+        resolution,
+        extractor,
+        source=None,
+        *,
+        extractor_version="1",
+        confidence=None,
+        derivation_refs=(),
+        limitations=(),
+    ):
+        """Build the only supported serializable evidence dictionary.
+
+        Source references are copied from the existing edge ``source`` shape so
+        evidence supplements that field without replacing it.  Unknown facts
+        must not carry a confidence score: zero means confidently false, while
+        ``None`` means the fact has not been established.
+        """
+        if kind == EvidenceKind.UNKNOWN and confidence is not None:
+            raise ValueError("UNKNOWN evidence must use confidence None")
+
+        if source is None:
+            source_refs = []
+        elif isinstance(source, SourceRef):
+            source_refs = [source]
+        else:
+            source_refs = [SourceRef(**source)]
+
+        return asdict(
+            Evidence(
+                kind=kind,
+                extractor=extractor,
+                extractor_version=extractor_version,
+                source_refs=source_refs,
+                derivation_refs=list(derivation_refs),
+                resolution=resolution,
+                confidence=confidence,
+                limitations=list(limitations),
+            )
+        )
+
+    def add_edge(self, edge_type, from_id, to_id, source, evidence=None, **extra):
         edge_id = self.next_edge_id()
+        if evidence is None:
+            evidence = self.make_evidence(
+                EvidenceKind.UNKNOWN,
+                ResolutionStatus.NOT_ATTEMPTED,
+                "add_edge",
+                source,
+            )
         self.edges.append(
-            {"id": edge_id, "type": edge_type, "from": from_id, "to": to_id, **extra, "source": source}
+            {
+                "id": edge_id,
+                "type": edge_type,
+                "from": from_id,
+                "to": to_id,
+                **extra,
+                "source": source,
+                "evidence": evidence,
+            }
         )
         return edge_id
 

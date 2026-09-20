@@ -67,18 +67,18 @@ def test_dataset_and_variable_endpoint_aliases_expand_to_unknown_types():
     }
 
 
-def test_reference_graph_is_0_3_0_and_validates_without_evidence():
+def test_reference_graph_is_0_3_0_and_validates_with_evidence():
     graph = json.loads(FIXTURE.read_text(encoding="utf-8"))
 
     assert graph["schema_version"] == "0.3.0"
     assert graph["schema"] == {
         "producer": "sas-graph",
         "producer_version": "0.2.0",
-        "capabilities": ["dataset_lineage", "variable_lineage"],
+        "capabilities": ["dataset_lineage", "variable_lineage", "evidence_v1"],
     }
     assert graph["main_programs"]
     assert graph["setup_file"] == "setup.sas"
-    assert all("evidence" not in edge for edge in graph["edges"])
+    assert all("evidence" in edge for edge in graph["edges"])
     assert validate_graph(graph) == []
 
 
@@ -101,12 +101,20 @@ def test_normalizer_upconverts_a_real_graph_without_dropping_envelope_data():
     assert normalized["schema"] == {
         "producer": "sas-graph",
         "producer_version": "0.2.0",
-        "capabilities": ["dataset_lineage", "variable_lineage"],
+        "capabilities": ["dataset_lineage", "variable_lineage", "evidence_v1"],
     }
     assert normalized["main_programs"] == source["main_programs"]
     assert normalized["setup_file"] == source["setup_file"]
     assert normalized["nodes"] == source["nodes"]
-    assert normalized["edges"] == source["edges"]
+    assert normalized["edges"] != source["edges"]
+    assert all("evidence" in edge for edge in normalized["edges"])
+    assert all(
+        edge["evidence"]["kind"] == "UNKNOWN"
+        and edge["evidence"]["resolution"] == "NOT_ATTEMPTED"
+        and edge["evidence"]["confidence"] is None
+        for edge in normalized["edges"]
+    )
+    assert all("evidence" not in edge for edge in source["edges"])
     assert validate_graph(normalized) == []
 
 
