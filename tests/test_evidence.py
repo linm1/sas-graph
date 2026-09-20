@@ -224,6 +224,7 @@ def test_normalizer_leaves_existing_evidence_untouched():
     normalized = normalize_graph(graph)
 
     assert normalized["edges"][0]["evidence"] == existing
+    # The docstring makes this shared identity intentional.
     assert normalized["edges"][0]["evidence"] is existing
 
 

@@ -147,7 +147,13 @@ EDGE_TYPES = frozenset(EDGE_ENDPOINTS)
 
 
 def normalize_graph(graph):
-    """Up-convert one loaded 0.2.0 graph to the 0.3.0 envelope."""
+    """Up-convert one loaded 0.2.0 graph to the 0.3.0 envelope.
+
+    This function does not mutate its input, but the returned graph shares
+    nested sub-objects (including ``evidence`` and ``source``) with that
+    input. Callers must not mutate nested dictionaries in either graph in
+    place afterwards.
+    """
     from .evidence import EvidenceKind, ResolutionStatus
     from .graph_model import GraphContext
 
@@ -171,6 +177,7 @@ def normalize_graph(graph):
     normalized["edges"] = []
     for edge in graph.get("edges", []):
         normalized_edge = dict(edge)
+        # Existing evidence intentionally keeps identity; see the docstring.
         if "evidence" not in normalized_edge:
             normalized_edge["evidence"] = GraphContext.make_evidence(
                 EvidenceKind.UNKNOWN,
