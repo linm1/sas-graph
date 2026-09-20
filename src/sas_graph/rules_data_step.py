@@ -241,7 +241,10 @@ def _single_dataset_binding(output_ids):
     return only[len("dataset:"):]
 
 
-def _bind_variable(raw_name, binding, statement_order, source, ctx, unresolved_names=()):
+def _bind_variable(
+    raw_name, binding, statement_order, source, ctx, unresolved_names=(),
+    report_finding=True,
+):
     raw_name = raw_name.strip()
     if raw_name.startswith("&"):
         raw_name = raw_name[1:].rstrip(".")
@@ -250,27 +253,31 @@ def _bind_variable(raw_name, binding, statement_order, source, ctx, unresolved_n
     if binding is not None:
         return ctx.add_variable(binding, raw_name)
     node_id = ctx.add_unknown_variable(raw_name, statement_order, source)
-    ctx.add_finding(
-        "unqualified_variable_reference",
-        "UNQUALIFIED_VARIABLE",
-        "WARNING",
-        raw_name,
-        f"`{raw_name}` has no single determinable owning dataset for this DATA step.",
-        "Split the step so each output target has unambiguous variable "
-        "references, or confirm the ambiguity is intentional.",
-        source,
-        affected_nodes=[node_id],
-    )
+    if report_finding:
+        ctx.add_finding(
+            "unqualified_variable_reference",
+            "UNQUALIFIED_VARIABLE",
+            "WARNING",
+            raw_name,
+            f"`{raw_name}` has no single determinable owning dataset for this DATA step.",
+            "Split the step so each output target has unambiguous variable "
+            "references, or confirm the ambiguity is intentional.",
+            source,
+            affected_nodes=[node_id],
+        )
     return node_id
 
 
-def _bind_ir_reference(reference, binding, statement_order, source, ctx):
+def _bind_ir_reference(
+    reference, binding, statement_order, source, ctx, report_finding=True,
+):
     unresolved_names = (
         (reference.name.lstrip("&").rstrip(".").lower(),)
         if reference.macro_unresolved else ()
     )
     return _bind_variable(
-        reference.name, binding, statement_order, source, ctx, unresolved_names
+        reference.name, binding, statement_order, source, ctx, unresolved_names,
+        report_finding,
     )
 
 
@@ -440,6 +447,10 @@ def _emit_assignment(statement, ctx, step_id, binding, let_events, condition=Non
         source,
         lambda reference: _bind_ir_reference(
             reference, binding, statement.statement_order, source, ctx
+        ),
+        bind_condition_variable=lambda reference: _bind_ir_reference(
+            reference, binding, statement.statement_order, source, ctx,
+            report_finding=False,
         ),
     )
 

@@ -52,6 +52,15 @@ def test_registry_contains_the_emitted_edge_vocabulary_without_dead_types():
     assert "contract_derived" not in EDGE_TYPES
     assert "conflicts_with" not in EDGE_TYPES
     assert "depends_on" in EDGE_TYPES
+    assert {"derives", "conditioned_by"} <= EDGE_TYPES
+
+
+def test_derivation_endpoints_mirror_writes_and_reverse_its_direction():
+    assert EDGE_ENDPOINTS["derives"] == EDGE_ENDPOINTS["writes_variable"]
+    assert EDGE_ENDPOINTS["conditioned_by"] == frozenset(
+        (target, source)
+        for source, target in EDGE_ENDPOINTS["writes_variable"]
+    )
 
 
 def test_dataset_and_variable_endpoint_aliases_expand_to_unknown_types():
@@ -65,6 +74,75 @@ def test_dataset_and_variable_endpoint_aliases_expand_to_unknown_types():
         ("UnknownDataset", "Dataset"),
         ("UnknownDataset", "UnknownDataset"),
     }
+
+
+def test_derivation_edges_validate_with_or_without_the_capability_flag():
+    graph = {
+        "schema_version": "0.2.0",
+        "nodes": [
+            {"id": "step:001", "type": "Step", "label": "step"},
+            {"id": "variable:work.a.flag", "type": "Variable", "label": "flag"},
+            {
+                "id": "unknownvariable:condition@2",
+                "type": "UnknownVariable",
+                "label": "condition",
+            },
+        ],
+        "edges": [
+            {
+                "id": "edge:001",
+                "type": "derives",
+                "from": "step:001",
+                "to": "variable:work.a.flag",
+            },
+            {
+                "id": "edge:002",
+                "type": "conditioned_by",
+                "from": "unknownvariable:condition@2",
+                "to": "step:001",
+            },
+        ],
+    }
+
+    assert validate_graph(graph) == []
+    graph["schema"] = {"capabilities": []}
+    assert validate_graph(graph) == []
+    graph["schema"] = {"capabilities": ["derivation_v1"]}
+    assert validate_graph(graph) == []
+
+
+def test_derivation_edges_reject_reversed_endpoint_pairs():
+    graph = {
+        "schema_version": "0.2.0",
+        "nodes": [
+            {"id": "step:001", "type": "Step", "label": "step"},
+            {"id": "variable:work.a.flag", "type": "Variable", "label": "flag"},
+        ],
+        "edges": [
+            {
+                "id": "edge:bad-1",
+                "type": "derives",
+                "from": "variable:work.a.flag",
+                "to": "step:001",
+            },
+            {
+                "id": "edge:bad-2",
+                "type": "conditioned_by",
+                "from": "step:001",
+                "to": "variable:work.a.flag",
+            },
+        ],
+    }
+
+    problems = validate_graph(graph)
+    assert any(
+        "edge:bad-1" in problem and "illegal endpoint pair" in problem
+        for problem in problems
+    )
+    assert any(
+        "edge:bad-2" in problem and "illegal endpoint pair" in problem
+        for problem in problems
+    )
 
 
 def test_reference_graph_is_0_3_0_and_validates_with_evidence():

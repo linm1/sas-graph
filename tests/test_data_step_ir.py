@@ -108,6 +108,27 @@ def test_condition_table():
         assert references == expected_references, repr(text)
 
 
+def test_expression_and_condition_spans_keep_their_source_text():
+    source = {
+        "file": "demo.sas",
+        "line_start": 4,
+        "line_end": 4,
+        "statement_order": 3,
+        "original_text": "if flag = other then target = a + b;",
+    }
+    assignment = parse_assignment(
+        "target = a + b;",
+        source,
+        set(),
+        _literal_value,
+        _rhs_identifiers,
+    )
+    condition = parse_condition("flag = other", source, _literal_value)
+
+    assert assignment.value.source_span.original_text == "a + b"
+    assert condition.source_span.original_text == "flag = other"
+
+
 def test_iter_variable_refs_table():
     nested = IRBinaryOp(IRUnaryOp("-", IRVariableRef("a")), "+", IRLiteral("1"))
     cases = [(nested, ["a"]), (IRLiteral("text"), [])]

@@ -9,11 +9,14 @@ from sas_graph.macro_state import walk_let_statements
 from sas_graph.statements import split_statements
 
 
-def build(text, file_name="adae.sas"):
+def build(text, file_name="adae.sas", derivation_v1=True):
     result = split_statements(text, file_name)
     blocks, _ = group_blocks(result.statements)
     events = walk_let_statements(result.statements)
-    ctx = GraphContext(main_programs=[file_name], setup_file="setup.sas", run_id="r1")
+    ctx = GraphContext(
+        main_programs=[file_name], setup_file="setup.sas", run_id="r1",
+        derivation_v1=derivation_v1,
+    )
     return blocks, ctx, events
 
 
@@ -735,6 +738,65 @@ def test_if_then_assignment_emits_condition_and_action_edges():
     assert ctx.findings == []
 
 
+def test_if_then_assignment_emits_derivation_and_conditioned_by_edges():
+    blocks, ctx, events = build(
+        "data work.a;\n"
+        "  set sdtm.ae;\n"
+        "  if left = right then target = a + b;\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    derives = [edge for edge in ctx.edges if edge["type"] == "derives"]
+    conditioned = [edge for edge in ctx.edges if edge["type"] == "conditioned_by"]
+    assert len(derives) == 1
+    assert derives[0]["from"] == "step:001"
+    assert derives[0]["to"] == "variable:work.a.target"
+    assert derives[0]["expression"] == "a + b"
+    assert derives[0]["evidence"]["kind"] == "UNKNOWN"
+    assert derives[0]["evidence"]["resolution"] == "NOT_ATTEMPTED"
+    assert derives[0]["evidence"]["confidence"] is None
+    assert {
+        (edge["from"], edge["to"], edge["condition_text"])
+        for edge in conditioned
+    } == {
+        ("variable:work.a.left", "step:001", "left = right"),
+        ("variable:work.a.right", "step:001", "left = right"),
+    }
+    assert len([edge for edge in ctx.edges if edge["type"] == "writes_variable"]) == 1
+
+
+def test_derivation_edges_deduplicate_repeated_condition_variables():
+    blocks, ctx, events = build(
+        "data work.a;\n"
+        "  set sdtm.ae;\n"
+        "  if left = left then target = 'Y';\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    conditioned = [edge for edge in ctx.edges if edge["type"] == "conditioned_by"]
+    assert [(edge["from"], edge["condition_text"]) for edge in conditioned] == [
+        ("variable:work.a.left", "left = left"),
+    ]
+
+
+def test_derivation_capability_off_preserves_existing_assignment_edges():
+    blocks, ctx, events = build(
+        "data work.a;\n"
+        "  set sdtm.ae;\n"
+        "  if left = right then target = 'Y';\n"
+        "run;\n",
+        derivation_v1=False,
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert not any(edge["type"] == "derives" for edge in ctx.edges)
+    assert not any(edge["type"] == "conditioned_by" for edge in ctx.edges)
+    assert any(edge["type"] == "writes_variable" for edge in ctx.edges)
+    assert "schema" not in ctx.to_graph()
+
+
 def test_if_then_computed_assignment_keeps_condition_and_rhs_reads():
     blocks, ctx, events = build(
         "data work.a;\n"
@@ -1317,6 +1379,7 @@ def test_if_compound_or_condition_declines_without_garbled_literal():
     ] == [
         ("unknown_expression", 'aesdth = "Y" or upcase(strip(aeout)) = "FATAL"')
     ]
+    assert not any(edge["type"] == "conditioned_by" for edge in ctx.edges)
 
 
 def test_if_three_way_or_condition_declines_without_garbled_literal():

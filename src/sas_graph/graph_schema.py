@@ -32,6 +32,17 @@ NODE_TYPES = frozenset(
 )
 
 
+_VARIABLE_WRITE_ENDPOINTS = frozenset(
+    {
+        ("Step", "Variable"),
+        ("Step", "UnknownVariable"),
+        ("MacroCall", "Variable"),
+        ("MacroCall", "UnknownVariable"),
+        ("SqlStatement", "Variable"),
+    }
+)
+
+
 EDGE_ENDPOINTS = {
     "reads_variable": frozenset(
         {
@@ -43,14 +54,10 @@ EDGE_ENDPOINTS = {
             ("UnknownVariable", "SqlStatement"),
         }
     ),
-    "writes_variable": frozenset(
-        {
-            ("Step", "Variable"),
-            ("Step", "UnknownVariable"),
-            ("MacroCall", "Variable"),
-            ("MacroCall", "UnknownVariable"),
-            ("SqlStatement", "Variable"),
-        }
+    "writes_variable": _VARIABLE_WRITE_ENDPOINTS,
+    "derives": _VARIABLE_WRITE_ENDPOINTS,
+    "conditioned_by": frozenset(
+        (target, source) for source, target in _VARIABLE_WRITE_ENDPOINTS
     ),
     "reads_dataset": frozenset(
         {

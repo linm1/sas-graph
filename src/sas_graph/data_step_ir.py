@@ -53,17 +53,33 @@ _BINARY_PRECEDENCE = {
 }
 
 
-def source_span(source):
-    """Convert an existing source mapping into the dependency-free IR span."""
+def source_span(source, original_text=None):
+    """Convert an existing source mapping into the dependency-free IR span.
+
+    Expression and condition nodes carry their own source text while the
+    assignment operation keeps the complete statement span.  Keeping that
+    text on the IR means graph emitters can expose source expressions without
+    re-parsing or re-rendering the expression tree.
+    """
 
     if isinstance(source, SourceSpan):
-        return source
+        if original_text is None or source.original_text == original_text:
+            return source
+        return SourceSpan(
+            file=source.file,
+            line_start=source.line_start,
+            line_end=source.line_end,
+            statement_order=source.statement_order,
+            original_text=original_text,
+        )
+    if original_text is None:
+        original_text = source.get("original_text", "")
     return SourceSpan(
         file=source.get("file", ""),
         line_start=source.get("line_start", 0),
         line_end=source.get("line_end", 0),
         statement_order=source.get("statement_order", 0),
-        original_text=source.get("original_text", ""),
+        original_text=original_text,
     )
 
 
@@ -268,18 +284,19 @@ def parse_assignment(
     span = source_span(source)
     target, rhs = match.group(1), match.group(2).strip()
     target_ref = _variable(target, unresolved_names, span)
+    expression_span = source_span(span, rhs)
     value = literal_value(rhs)
     if value is not None:
-        expression = IRLiteral(value, span)
+        expression = IRLiteral(value, expression_span)
     else:
         try:
             expression = _ExpressionParser(
-                rhs, unresolved_names, span, literal_value,
+                rhs, unresolved_names, expression_span, literal_value,
             ).parse()
         except _UnsupportedExpression:
             expression = IRUnknownExpression(
                 rhs,
-                span,
+                expression_span,
                 _unknown_refs(rhs, unresolved_names, span, rhs_identifiers),
             )
     return IRAssignment(target_ref, expression, condition, span)
@@ -290,18 +307,23 @@ def parse_condition(condition_text, source, literal_value):
 
     span = source_span(source)
     text = condition_text.strip()
+    condition_span = source_span(span, text)
     match = _COMPARISON_RE.match(text)
     if not match:
-        return IRUnknownExpression(text, span)
+        return IRUnknownExpression(text, condition_span)
     lhs, operator, rhs = match.group(1), match.group(2), match.group(3).strip()
     operator = _COMPARISON_OPERATOR_ALIASES.get(operator, operator).upper()
-    lhs_ref = IRVariableRef(lhs, False, span)
+    lhs_ref = IRVariableRef(lhs, False, condition_span)
     value = literal_value(rhs)
     if value is not None:
-        return IRComparison(lhs_ref, operator, IRLiteral(value, span), span)
+        return IRComparison(
+            lhs_ref, operator, IRLiteral(value, condition_span), condition_span,
+        )
     if _BARE_IDENTIFIER_RE.match(rhs):
-        return IRComparison(lhs_ref, operator, IRVariableRef(rhs, False, span), span)
-    return IRUnknownExpression(text, span)
+        return IRComparison(
+            lhs_ref, operator, IRVariableRef(rhs, False, condition_span), condition_span,
+        )
+    return IRUnknownExpression(text, condition_span)
 
 
 def _add_unknown_finding(ctx, source, expression, step_id):
@@ -320,7 +342,9 @@ def _add_unknown_finding(ctx, source, expression, step_id):
     )
 
 
-def emit_assignment(assignment, ctx, step_id, source, bind_variable):
+def emit_assignment(
+    assignment, ctx, step_id, source, bind_variable, bind_condition_variable=None,
+):
     """Emit the existing variable edges from an ``IRAssignment``."""
 
     value = assignment.value
@@ -345,6 +369,41 @@ def emit_assignment(assignment, ctx, step_id, source, bind_variable):
         "writes_variable", step_id, target_id, source,
         value=literal, operator=None,
     )
+
+    if not getattr(ctx, "derivation_v1", True):
+        return
+
+    expression_span = getattr(value, "source_span", None)
+    expression_text = (
+        expression_span.original_text if expression_span is not None else None
+    )
+    if isinstance(value, IRUnknownExpression):
+        expression_text = value.source_text
+    ctx.add_edge(
+        "derives", step_id, target_id, source,
+        expression=expression_text,
+    )
+
+    condition = assignment.condition
+    if not isinstance(condition, IRComparison):
+        return
+
+    condition_span = getattr(condition, "source_span", None)
+    condition_text = (
+        condition_span.original_text if condition_span is not None else None
+    )
+    condition_binder = bind_condition_variable or bind_variable
+    emitted = set()
+    for reference in iter_variable_refs(condition):
+        key = (reference.name.lower(), reference.macro_unresolved)
+        if key in emitted:
+            continue
+        emitted.add(key)
+        variable_id = condition_binder(reference)
+        ctx.add_edge(
+            "conditioned_by", variable_id, step_id, source,
+            condition_text=condition_text,
+        )
 
 
 def emit_condition(condition, ctx, step_id, source, bind_variable):

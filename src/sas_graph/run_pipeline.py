@@ -443,11 +443,12 @@ def _report_read_but_never_written(ctx):
         )
 
 
-def run(config_result, run_id, source_paths=None):
+def run(config_result, run_id, source_paths=None, derivation_v1=True):
     """Execute section 9 end to end and return the assembled graph dict.
 
     Caller (cli.py) owns save -> reload -> render per section 4.2; this
     function only builds the in-memory graph and hands it back.
+    ``derivation_v1`` gates only the additive DATA-step derivation edges.
 
     N declared programs parse into one shared `GraphContext` (wayfinder:
     per-program-macro-state-isolation, merged-and-per-program-run-layout) --
@@ -460,7 +461,7 @@ def run(config_result, run_id, source_paths=None):
 
     ctx = GraphContext(
         main_programs=[p.name for p in config_result.main_programs],
-        setup_file=setup_name, run_id=run_id,
+        setup_file=setup_name, run_id=run_id, derivation_v1=derivation_v1,
     )
     ctx.add_existing_findings(config_result.findings)
     setup_node_id = f"setup:{setup_name}"

@@ -55,6 +55,10 @@ class GraphContext:
     `by_vars`. Every sort also records its effective statement order in
     `sort_by_at`, so a completed DATA block can ignore later sort evidence.
 
+    `derivation_v1` controls only the additive DATA-step derivation edges.  It
+    defaults on for the current pipeline capability and is recorded in the
+    graph's schema capabilities.
+
     For N declared programs (wayfinder: per-program-macro-state-isolation),
     `run_pipeline.run` resets `sort_by_of`/`sort_by_at` to a setup-only
     snapshot before each program's parse -- structural sort evidence from one
@@ -70,6 +74,7 @@ class GraphContext:
     main_programs: tuple
     setup_file: str
     run_id: str
+    derivation_v1: bool = True
     nodes: list = field(default_factory=list)
     edges: list = field(default_factory=list)
     findings: list = field(default_factory=list)
@@ -309,13 +314,25 @@ class GraphContext:
         return "COMPLETE"
 
     def to_graph(self):
-        return {
+        graph = {
             "schema_version": SCHEMA_VERSION,
             "run_id": self.run_id,
             "run_status": self.run_status(),
             "main_programs": list(self.main_programs),
             "setup_file": self.setup_file,
+        }
+        if self.derivation_v1:
+            graph["schema"] = {
+                "producer": "sas-graph",
+                "producer_version": SCHEMA_VERSION,
+                "capabilities": [
+                    "dataset_lineage", "variable_lineage", "evidence_v1",
+                    "derivation_v1",
+                ],
+            }
+        graph.update({
             "nodes": self.nodes,
             "edges": self.edges,
             "findings": self.findings,
-        }
+        })
+        return graph
