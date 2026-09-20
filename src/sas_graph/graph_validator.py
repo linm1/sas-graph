@@ -94,12 +94,20 @@ def validate_graph(graph):
                 )
 
         if "id" in node:
-            if any(existing == node["id"] for existing in node_ids):
+            if not isinstance(node_id, str):
                 problems.append(
-                    "duplicate node id {0}".format(_reference(node["id"]))
+                    "node {0} has non-string id (type {1})".format(
+                        _reference(node_id),
+                        type(node_id).__name__,
+                    )
                 )
-            node_ids.append(node["id"])
-            node_types_by_id.setdefault(node["id"], node.get("type"))
+            if any(existing == node_id for existing in node_ids):
+                problems.append(
+                    "duplicate node id {0}".format(_reference(node_id))
+                )
+            node_ids.append(node_id)
+            if isinstance(node_id, str):
+                node_types_by_id.setdefault(node_id, node.get("type"))
 
     for index, edge in enumerate(_records(graph, "edges", problems)):
         if not isinstance(edge, dict):
@@ -129,10 +137,22 @@ def validate_graph(graph):
                 )
 
         dangling = False
+        malformed_endpoint = False
         for endpoint in ("from", "to"):
             if endpoint not in edge:
                 continue
             endpoint_id = edge[endpoint]
+            if not isinstance(endpoint_id, str):
+                malformed_endpoint = True
+                problems.append(
+                    "edge {0} has non-string {1} endpoint {2} (type {3})".format(
+                        _reference(edge_id),
+                        endpoint,
+                        _reference(endpoint_id),
+                        type(endpoint_id).__name__,
+                    )
+                )
+                continue
             if endpoint_id not in node_types_by_id:
                 dangling = True
                 problems.append(
@@ -144,6 +164,7 @@ def validate_graph(graph):
 
         if (
             dangling
+            or malformed_endpoint
             or not isinstance(edge_type, str)
             or edge_type not in EDGE_ENDPOINTS
         ):

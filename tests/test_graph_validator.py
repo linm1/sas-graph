@@ -174,6 +174,37 @@ def test_dangling_endpoint_skips_endpoint_pair_check():
     assert "missing" in problems[0]
 
 
+def test_non_string_node_id_is_reported_without_raising():
+    problems = validate_graph(graph(nodes=[node(["a", "b"])]))
+
+    assert len(problems) == 1
+    assert "['a', 'b']" in problems[0]
+    assert "list" in problems[0]
+
+
+def test_non_string_edge_endpoint_is_reported_without_dangling_or_pair_noise():
+    problems = validate_graph(
+        graph(
+            nodes=[node("present")],
+            edges=[edge(edge_id="bad:001", from_id={"k": 1}, to_id="present")],
+        )
+    )
+
+    assert len(problems) == 1
+    assert "bad:001" in problems[0]
+    assert "{'k': 1}" in problems[0]
+    assert "dict" in problems[0]
+
+
+def test_malformed_node_id_does_not_suppress_unrelated_problem():
+    problems = validate_graph(
+        graph(nodes=[node(["a", "b"]), node("mystery", node_type="FutureNode")])
+    )
+
+    assert any("['a', 'b']" in problem and "list" in problem for problem in problems)
+    assert any("mystery" in problem and "FutureNode" in problem for problem in problems)
+
+
 def demo():
     for name, value in sorted(globals().items()):
         if name.startswith("test_") and callable(value):
