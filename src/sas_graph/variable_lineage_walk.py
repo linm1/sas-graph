@@ -116,11 +116,6 @@ def walk_variable_impact(
     while frontier:
         variable_id, variable_depth = frontier.popleft()
         read_edges = reads_by_from.get(variable_id, {}).get("reads_variable", [])
-        if bounded and variable_depth >= depth:
-            if read_edges:
-                depth_hit = True
-                continuation.append(variable_id)
-            continue
 
         for read_edge in read_edges:
             operation_id = read_edge["to"]
@@ -148,39 +143,36 @@ def walk_variable_impact(
             visited_nodes.add(operation_id)
             entry["via_edges"].append(read_edge["id"])
 
-            operation_depth = variable_depth + 1
             write_edges = writes_by_from.get(operation_id, {}).get(
                 "writes_variable", []
             )
-            if bounded and operation_depth >= depth:
-                has_unexpanded_write = False
-                for write_edge in write_edges:
-                    target_variable = write_edge["to"]
-                    if target_variable in visited_variables:
-                        category_facts.append(
-                            _fact(write_edge, operation_id, cycle=True)
-                        )
-                    else:
-                        has_unexpanded_write = True
-                if has_unexpanded_write:
-                    depth_hit = True
-                    continuation.append(operation_id)
-                continue
-
+            has_unexpanded_write = False
             for write_edge in write_edges:
                 target_variable = write_edge["to"]
                 is_cycle = target_variable in visited_variables
-                category_facts.append(_fact(write_edge, operation_id, cycle=is_cycle))
                 if is_cycle:
+                    category_facts.append(_fact(write_edge, operation_id, cycle=True))
                     continue
+
+                target_depth = variable_depth + 1
+                if bounded and target_depth > depth:
+                    has_unexpanded_write = True
+                    continue
+
                 if bounded and result_count() >= limit:
                     limit_hit = True
                     continuation.append(target_variable)
                     break
+
+                category_facts.append(_fact(write_edge, operation_id))
                 visited_variables.add(target_variable)
                 visited_nodes.add(target_variable)
                 reached_variables.append(target_variable)
-                frontier.append((target_variable, operation_depth + 1))
+                frontier.append((target_variable, target_depth))
+
+            if has_unexpanded_write:
+                depth_hit = True
+                continuation.append(operation_id)
 
             if limit_hit:
                 break

@@ -63,7 +63,7 @@ def _record_id(record):
     return str(record.get("id", ""))
 
 
-def search_nodes(graph, query, limit=DEFAULT_LIMIT):
+def search_nodes(graph, query, limit=DEFAULT_LIMIT, index=None):
     """Return nodes whose label or type contains ``query`` case-insensitively.
 
     Search is bounded by result count.  ``visited_count`` records the number
@@ -74,7 +74,8 @@ def search_nodes(graph, query, limit=DEFAULT_LIMIT):
         raise TypeError("query must be a string")
     validate_bounds(DEFAULT_DEPTH, limit)
 
-    index = GraphIndex(graph)
+    if index is None:
+        index = GraphIndex(graph)
     needle = query.casefold()
     matches = []
     for node in sorted(index.nodes_by_id.values(), key=_record_id):
@@ -114,8 +115,16 @@ def _lineage_edges(index, node_id, direction):
     return sorted(edges, key=_record_id)
 
 
+def _lineage_depth_increment(node):
+    return 1 if node.get("type") == "Dataset" else 0
+
+
 def _walk_lineage(index, start_id, direction, depth, limit):
-    """Walk indexed lineage edges in one direction with ticket-07 bounds."""
+    """Walk indexed lineage edges with ticket-07 bounds.
+
+    Only Dataset nodes consume the depth budget.  Structural nodes remain in
+    the result and are traversed through without advancing the budget.
+    """
     nodes = index.nodes_by_id
     visited = {start_id}
     frontier = deque([(start_id, 0)])
@@ -129,39 +138,10 @@ def _walk_lineage(index, start_id, direction, depth, limit):
     while frontier:
         current, current_depth = frontier.popleft()
         edges = _lineage_edges(index, current, direction)
-        if current_depth >= depth:
-            # A cycle at the depth boundary is still reported: otherwise a
-            # closing edge would be indistinguishable from an unexpanded
-            # frontier and the cycle marker promised by ticket 07 would be
-            # lost.
-            for edge in edges:
-                edge_id = edge.get("id")
-                if edge_id in walked_edge_ids:
-                    continue
-                neighbor = (
-                    edge.get("from") if direction == "upstream" else edge.get("to")
-                )
-                if neighbor not in visited and neighbor not in nodes:
-                    raise ValueError(
-                        f"lineage edge {edge_id!r} points to missing node {neighbor!r}"
-                    )
-                if neighbor in visited:
-                    walked_edge_ids.add(edge_id)
-                    walked_edges.append(_edge_result(edge, cycle=True))
-            if any(
-                (edge.get("from") if direction == "upstream" else edge.get("to"))
-                not in visited
-                for edge in edges
-            ):
-                depth_hit = True
-                continuation.append(current)
-            continue
-
         for edge in edges:
             edge_id = edge.get("id")
             if edge_id in walked_edge_ids:
                 continue
-            walked_edge_ids.add(edge_id)
             neighbor = edge.get("from") if direction == "upstream" else edge.get("to")
             if neighbor not in visited and neighbor not in nodes:
                 raise ValueError(
@@ -169,17 +149,26 @@ def _walk_lineage(index, start_id, direction, depth, limit):
                 )
 
             is_cycle = neighbor in visited
-            walked_edges.append(_edge_result(edge, cycle=is_cycle))
+            walked_edge_ids.add(edge_id)
             if is_cycle:
+                walked_edges.append(_edge_result(edge, cycle=True))
                 continue
 
             if len(reached) >= limit:
                 limit_hit = True
                 continuation.append(neighbor)
                 break
+
+            next_depth = current_depth + _lineage_depth_increment(nodes[neighbor])
+            if next_depth > depth:
+                depth_hit = True
+                continuation.append(current)
+                continue
+
             visited.add(neighbor)
             reached.append(_node_result(nodes[neighbor]))
-            frontier.append((neighbor, current_depth + 1))
+            walked_edges.append(_edge_result(edge))
+            frontier.append((neighbor, next_depth))
 
         if limit_hit:
             break
@@ -204,13 +193,15 @@ def trace_lineage(
     direction="both",
     depth=DEFAULT_DEPTH,
     limit=DEFAULT_LIMIT,
+    index=None,
 ):
     """Trace bounded structural Dataset/Step/SqlStatement lineage."""
     if direction not in _DIRECTIONS:
         raise ValueError("direction must be upstream, downstream, or both")
     depth, limit = validate_bounds(depth, limit)
 
-    index = GraphIndex(graph)
+    if index is None:
+        index = GraphIndex(graph)
     start = index.nodes_by_id.get(start_id)
     if start is None:
         raise ValueError(f"node not found: {start_id}")
@@ -269,10 +260,12 @@ def analyze_impact(
     variable_id,
     depth=DEFAULT_DEPTH,
     limit=DEFAULT_LIMIT,
+    index=None,
 ):
     """Validate and run the bounded variable-level impact walk."""
     depth, limit = validate_bounds(depth, limit)
-    index = GraphIndex(graph)
+    if index is None:
+        index = GraphIndex(graph)
     node = index.nodes_by_id.get(variable_id)
     if node is None:
         raise ValueError(f"variable not found: {variable_id}")

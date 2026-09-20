@@ -62,6 +62,8 @@ class GraphIndex:
         # projection owns its shape and cannot drift with that helper.
         for node in _records(graph, "nodes"):
             node_id = node.get("id")
+            if node_id is None:
+                continue
             self.nodes_by_id[node_id] = node
             self.outgoing_edges_by_node.setdefault(node_id, {})
             self.incoming_edges_by_node.setdefault(node_id, {})
@@ -91,15 +93,6 @@ class GraphIndex:
 
         self._sort_edge_lists()
         self._sort_source_lists()
-
-        # These aliases keep the shape discoverable for callers while all
-        # names continue to point at the same plain dictionaries.
-        self.outgoing_edges = self.outgoing_edges_by_node
-        self.incoming_edges = self.incoming_edges_by_node
-        self.outgoing_by_node = self.outgoing_edges_by_node
-        self.incoming_by_node = self.incoming_edges_by_node
-        self.findings_by_object = self.findings_by_affected_object
-        self.source_files = self.source_file_index
 
     def _index_source(self, record, category, record_id):
         source = record.get("source")

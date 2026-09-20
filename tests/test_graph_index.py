@@ -5,6 +5,7 @@ the real-pipeline test keeps the query contract tied to graph.json output.
 """
 
 import copy
+import gc
 import math
 import os
 import random
@@ -23,6 +24,7 @@ from sas_graph.run_pipeline import run
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "variable_lineage"
+BASIC_ADAE_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "basic_adae"
 
 
 def _node(node_id, node_type, label=None, source=None):
@@ -117,6 +119,14 @@ def _real_pipeline_graph():
         return load_graph(save_graph(graph, Path(temporary) / "graph.json"))
 
 
+def _basic_adae_graph():
+    result = load_config(BASIC_ADAE_FIXTURE_DIR / "project.yaml")
+    assert result.ok, result.findings
+    graph = run(result, run_id="graph-index-basic-adae")
+    with tempfile.TemporaryDirectory() as temporary:
+        return load_graph(save_graph(graph, Path(temporary) / "graph.json"))
+
+
 def synthetic_graph(node_count=10000, seed=1337):
     """Build a deterministic graph for the optional local latency benchmark."""
     if node_count < 4:
@@ -204,13 +214,13 @@ def test_graph_index_builds_type_and_source_projections_without_mutating_graph()
     assert graph == original
 
 
-def test_graph_index_exposes_clear_aliases_for_plain_dict_projections():
-    index = GraphIndex(_indexed_graph())
+def test_graph_index_skips_nodes_without_ids():
+    graph = _indexed_graph()
+    graph["nodes"].append({"type": "Dataset", "label": "missing id"})
 
-    assert index.outgoing_edges is index.outgoing_edges_by_node
-    assert index.incoming_edges is index.incoming_edges_by_node
-    assert index.findings_by_object is index.findings_by_affected_object
-    assert index.source_files is index.source_file_index
+    index = GraphIndex(graph)
+
+    assert None not in index.nodes_by_id
 
 
 def test_trace_lineage_marks_cycle_and_terminates():
@@ -227,15 +237,24 @@ def test_trace_lineage_marks_cycle_and_terminates():
 
 
 def test_query_bounds_defaults_apply_and_report_truncation():
-    graph = _linear_graph(8)
+    graph = _linear_graph(12)
 
     default_result = trace_lineage(graph, "dataset:000", "downstream")
-    assert len(default_result["downstream_nodes"]) == 5
+    assert len(default_result["downstream_nodes"]) == 11
     assert default_result["truncated"] is True
-    assert default_result["visited_count"] == 6
+    assert default_result["visited_count"] == 12
     assert default_result["depth_hit"] is True
     assert default_result["limit_hit"] is False
-    assert default_result["continuation"]
+    assert default_result["continuation"] == ["step:011"]
+
+    zero_depth_result = trace_lineage(
+        _linear_graph(2), "dataset:000", "downstream", depth=0
+    )
+    assert [node["id"] for node in zero_depth_result["downstream_nodes"]] == [
+        "step:001"
+    ]
+    assert [edge["id"] for edge in zero_depth_result["edges"]] == ["edge:001"]
+    assert zero_depth_result["depth_hit"] is True
 
     limited_result = trace_lineage(
         _linear_graph(8), "dataset:000", "downstream", depth=20, limit=2
@@ -245,6 +264,15 @@ def test_query_bounds_defaults_apply_and_report_truncation():
     assert limited_result["visited_count"] == 3
     assert limited_result["limit_hit"] is True
     assert limited_result["depth_hit"] is False
+    returned_ids = {
+        limited_result["start"],
+        *(node["id"] for node in limited_result["downstream_nodes"]),
+    }
+    assert all(
+        edge.get("cycle")
+        or {edge["from"], edge["to"]} <= returned_ids
+        for edge in limited_result["edges"]
+    )
 
 
 def test_query_bounds_reject_values_above_ticket_ceilings():
@@ -289,6 +317,92 @@ def test_search_and_impact_include_bounded_metadata():
     assert impact_result["truncated"] is True
     assert impact_result["limit_hit"] is True
     assert impact_result["visited_count"] == 2
+    returned_variables = set(impact_result["reached_variables"])
+    edge_by_id = {edge["id"]: edge for edge in graph["edges"]}
+    assert all(
+        returned_variables
+        & {edge_by_id[fact["edge"]]["from"], edge_by_id[fact["edge"]]["to"]}
+        for fact in impact_result["category_facts"]
+    )
+    assert {fact["edge"] for fact in impact_result["category_facts"]} == {"edge:1"}
+
+
+def test_default_lineage_depth_counts_dataset_hops_on_basic_adae_fixture():
+    result = trace_lineage(_basic_adae_graph(), "dataset:adam.adae", "both")
+
+    assert {node["id"] for node in result["upstream_nodes"]} == {
+        "step:003",
+        "macrocall:001",
+        "dataset:work.adae_srt",
+        "step:002",
+        "dataset:work.adae_pre",
+        "step:001",
+        "dataset:sdtm.ae",
+        "dataset:adam.adsl",
+    }
+    assert result["downstream_nodes"] == []
+    assert result["truncated"] is False
+    assert result["depth_hit"] is False
+
+
+def test_impact_depth_counts_variable_hops_and_returns_structural_operations():
+    graph = {
+        "nodes": [
+            _node("variable:a", "Variable"),
+            _node("step:1", "Step"),
+            _node("variable:b", "Variable"),
+            _node("step:2", "Step"),
+            _node("variable:c", "Variable"),
+        ],
+        "edges": [
+            _edge("edge:1", "reads_variable", "variable:a", "step:1"),
+            _edge("edge:2", "writes_variable", "step:1", "variable:b"),
+            _edge("edge:3", "reads_variable", "variable:b", "step:2"),
+            _edge("edge:4", "writes_variable", "step:2", "variable:c"),
+        ],
+    }
+
+    result = analyze_impact(graph, "variable:a", depth=1)
+
+    assert result["reached_variables"] == ["variable:a", "variable:b"]
+    assert [operation["id"] for operation in result["reached_operations"]] == [
+        "step:1",
+        "step:2",
+    ]
+    assert {fact["edge"] for fact in result["category_facts"]} == {
+        "edge:1",
+        "edge:2",
+        "edge:3",
+    }
+    assert result["depth_hit"] is True
+    assert result["continuation"] == ["step:2"]
+
+
+def test_queries_accept_a_reusable_graph_index():
+    graph = {
+        "nodes": [
+            _node("dataset:a", "Dataset", "alpha"),
+            _node("step:1", "Step", "build"),
+            _node("dataset:b", "Dataset", "beta"),
+            _node("variable:a", "Variable", "alpha"),
+            _node("variable:b", "Variable", "beta"),
+        ],
+        "edges": [
+            _edge("dataset-edge:1", "reads_dataset", "dataset:a", "step:1"),
+            _edge("dataset-edge:2", "writes_dataset", "step:1", "dataset:b"),
+            _edge("variable-edge:1", "reads_variable", "variable:a", "step:1"),
+            _edge("variable-edge:2", "writes_variable", "step:1", "variable:b"),
+        ],
+    }
+    index = GraphIndex(graph)
+
+    assert search_nodes(graph, "a") == search_nodes(graph, "a", index=index)
+    assert trace_lineage(graph, "dataset:a", "downstream") == trace_lineage(
+        graph, "dataset:a", "downstream", index=index
+    )
+    assert analyze_impact(graph, "variable:a") == analyze_impact(
+        graph, "variable:a", index=index
+    )
 
 
 def test_existing_query_keys_survive_on_real_pipeline_graph():
@@ -331,29 +445,47 @@ def _p95_ms(samples):
 )
 def test_bench_10k_graph_p95_per_primitive():
     graph = synthetic_graph()
+    index = GraphIndex(graph)
     queries = {
-        "search_nodes": lambda: search_nodes(graph, "dataset"),
-        "trace_lineage": lambda: trace_lineage(graph, "dataset:00000", "downstream"),
-        "analyze_impact": lambda: analyze_impact(graph, "variable:00000"),
+        "search_nodes": lambda: search_nodes(graph, "dataset", index=index),
+        "trace_lineage": lambda: trace_lineage(
+            graph, "dataset:00000", "downstream", index=index
+        ),
+        "analyze_impact": lambda: analyze_impact(
+            graph, "variable:00000", index=index
+        ),
     }
-    figures = {}
+    sample_count = 30
+    gc.collect()
+    cold_samples = []
+    for _ in range(sample_count):
+        start = time.perf_counter()
+        GraphIndex(graph)
+        cold_samples.append(time.perf_counter() - start)
+    cold_p95 = _p95_ms(cold_samples)
+    assert cold_p95 < 200
+
     for name, query in queries.items():
         query()
+        gc.collect()
         samples = []
-        for _ in range(15):
+        for _ in range(sample_count):
             start = time.perf_counter()
             query()
             samples.append(time.perf_counter() - start)
-        figures[name] = _p95_ms(samples)
-        print(f"benchmark {name} p95_ms={figures[name]:.3f}")
-        assert figures[name] < 200
+        warm_p95 = _p95_ms(samples)
+        print(
+            f"benchmark {name} warm_p95_ms={warm_p95:.3f} "
+            f"cold_p95_ms={cold_p95:.3f}"
+        )
+        assert warm_p95 < 200
 
 
 def demo():
     """Run the non-benchmark tests without requiring pytest fixtures."""
     tests = [
         test_graph_index_builds_type_and_source_projections_without_mutating_graph,
-        test_graph_index_exposes_clear_aliases_for_plain_dict_projections,
+        test_graph_index_skips_nodes_without_ids,
         test_trace_lineage_marks_cycle_and_terminates,
         test_query_bounds_defaults_apply_and_report_truncation,
         test_query_bounds_reject_values_above_ticket_ceilings,

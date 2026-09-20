@@ -74,7 +74,7 @@ def test_search_returns_empty_success_for_no_match():
     assert result["truncated"] is False
 
 
-def test_trace_lineage_from_dataset_both_directions_is_unbounded_and_cycle_safe():
+def test_trace_lineage_from_dataset_both_directions_is_bounded_and_cycle_safe():
     result = trace_lineage(_graph(), "dataset:work.a", "both")
 
     assert result["start"] == "dataset:work.a"
