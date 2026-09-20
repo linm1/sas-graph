@@ -18,15 +18,26 @@ def _reference(value):
     return repr(value)
 
 
-def _records(graph, key):
+def _records(graph, key, problems):
     """Return a graph collection when it has the expected container shape.
 
     Graphs normally come from JSON and therefore contain lists.  Treat a
     malformed or absent collection as empty here so one bad collection does
     not prevent the validator from reporting the other contract problems.
     """
-    records = graph.get(key, [])
-    return records if isinstance(records, list) else []
+    if key not in graph:
+        problems.append("graph key '{0}' is missing; expected a list".format(key))
+        return []
+
+    records = graph[key]
+    if not isinstance(records, list):
+        problems.append(
+            "graph key '{0}' must be a list; found {1}".format(
+                key, type(records).__name__
+            )
+        )
+        return []
+    return records
 
 
 def validate_graph(graph):
@@ -54,7 +65,7 @@ def validate_graph(graph):
         )
 
     node_ids = []
-    for index, node in enumerate(_records(graph, "nodes")):
+    for index, node in enumerate(_records(graph, "nodes", problems)):
         if not isinstance(node, dict):
             problems.append(
                 "node at index {0} must be a dictionary with keys {1}".format(
@@ -79,7 +90,7 @@ def validate_graph(graph):
                 )
             node_ids.append(node["id"])
 
-    for index, edge in enumerate(_records(graph, "edges")):
+    for index, edge in enumerate(_records(graph, "edges", problems)):
         if not isinstance(edge, dict):
             problems.append(
                 "edge at index {0} must be a dictionary with keys {1}".format(

@@ -25,6 +25,49 @@ def test_valid_graph_has_no_problems():
     assert validate_graph(graph(nodes=[node()], edges=[edge()])) == []
 
 
+def test_missing_nodes_collection_is_reported():
+    problems = validate_graph({"schema_version": "0.2.0", "edges": []})
+
+    assert len(problems) == 1
+    assert "nodes" in problems[0]
+    assert "missing" in problems[0]
+
+
+def test_non_list_nodes_collection_is_reported():
+    problems = validate_graph(
+        {"schema_version": "0.2.0", "nodes": "oops", "edges": []}
+    )
+
+    assert len(problems) == 1
+    assert "nodes" in problems[0]
+    assert "str" in problems[0]
+
+
+def test_non_list_collections_are_reported():
+    problems = validate_graph(
+        {"schema_version": "0.2.0", "nodes": {}, "edges": {}}
+    )
+
+    assert len(problems) == 2
+    assert any("nodes" in problem and "dict" in problem for problem in problems)
+    assert any("edges" in problem and "dict" in problem for problem in problems)
+
+
+def test_bad_nodes_collection_does_not_suppress_dangling_edge_problem():
+    problems = validate_graph(
+        {
+            "schema_version": "0.2.0",
+            "nodes": "oops",
+            "edges": [edge(from_id="missing:node", to_id="missing:node")],
+        }
+    )
+
+    assert any("nodes" in problem and "str" in problem for problem in problems)
+    assert any(
+        "dangling" in problem and "missing:node" in problem for problem in problems
+    )
+
+
 def test_dangling_edge_reference_names_edge_and_missing_node_ids():
     problems = validate_graph(
         graph(nodes=[node()], edges=[edge(from_id="missing:node")])
