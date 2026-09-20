@@ -1311,7 +1311,12 @@ def test_if_compound_or_condition_declines_without_garbled_literal():
         e.get("value") == 'Y" or upcase(strip(aeout)) = "FATAL"'
         for e in ctx.edges
     )
-    assert ctx.findings == []
+    assert [
+        (finding["type"], finding["object"])
+        for finding in ctx.findings
+    ] == [
+        ("unknown_expression", 'aesdth = "Y" or upcase(strip(aeout)) = "FATAL"')
+    ]
 
 
 def test_if_three_way_or_condition_declines_without_garbled_literal():
@@ -1323,7 +1328,10 @@ def test_if_three_way_or_condition_declines_without_garbled_literal():
     rules_data_step.apply(blocks[0], ctx, events)
 
     assert not any(e["type"] == "reads_variable" for e in ctx.edges)
-    assert ctx.findings == []
+    assert [
+        (finding["type"], finding["object"])
+        for finding in ctx.findings
+    ] == [("unknown_expression", 'a = "Y" or b = "Y" or c = "Y"')]
 
 
 def test_if_simple_literal_condition_remains_unchanged():
@@ -1592,7 +1600,10 @@ def test_undeclared_function_call_keeps_normal_variable_edges():
     assert writes == {
         ("variable:work.a.y", None, None, "data_step_assignment"),
     }
-    assert ctx.findings == []
+    assert [
+        (finding["type"], finding["object"])
+        for finding in ctx.findings
+    ] == [("unknown_expression", "somefunc(i)")]
 
 
 def test_array_reference_detection_ignores_a_brace_inside_a_string_literal():

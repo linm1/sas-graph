@@ -13,6 +13,12 @@ Scope for this pass: 12.1 (SET), 12.2-12.4 (MERGE/BY + sort-prefix), 12.5
 import re
 from dataclasses import replace
 
+from .data_step_ir import (
+    emit_assignment as _emit_assignment_ir,
+    emit_condition as _emit_condition_ir,
+    parse_assignment as _parse_assignment_ir,
+    parse_condition as _parse_condition_ir,
+)
 from .macro_state import resolve_text
 
 _SET_RE = re.compile(r"^set\s+(.+?);?$", re.IGNORECASE)
@@ -39,11 +45,10 @@ _RENAME_PAIR_RE = re.compile(
 # supported grammar. Anchored at `^`, so a keyword-led statement (`rename
 # x=y;`, `do i=1 to 10;`) never matches: the keyword itself isn't followed by
 # `=`, only the identifier after it is. Anything outside this grammar
-# (compound AND/OR conditions, IN/LIKE) falls through with no edge and no
-# finding. Arrays, DO loops, and dynamic variable lists are handled by
+# (compound AND/OR conditions, IN/LIKE) emits an unknown-expression finding
+# without guessing an edge. Arrays, DO loops, and dynamic variable lists are handled by
 # wayfinder: data-step-keep-drop-rename-variable-edges -- they get a
 # deferred-construct finding instead (see `_emit_variable_edges`).
-_ASSIGNMENT_RE = re.compile(r"^(&?[A-Za-z_]\w*\.?)\s*=\s*(.+?);?$")
 _DO_HEAD_RE = re.compile(r"^do\b", re.IGNORECASE)
 _ARRAY_DECL_RE = re.compile(
     r"^array\s+([A-Za-z_]\w*)\s*[\{\[\(]", re.IGNORECASE
@@ -76,11 +81,6 @@ _INPUT_PUT_HEAD_RE = re.compile(
     r"^(input|put)\b(?!\s*(?:\(|=|;|$))", re.IGNORECASE
 )
 _WHERE_HEAD_RE = re.compile(r"^where\s+(.+?);?$", re.IGNORECASE)
-_COMPARISON_RE = re.compile(
-    r"^([A-Za-z_]\w*)\s*(=>|=<|~=|\^=|>=|<=|>|<|=|\beq\b|\bne\b|\bgt\b|\blt\b|\bge\b|\ble\b)\s*(.+)$",
-    re.IGNORECASE,
-)
-_COMPARISON_OPERATOR_ALIASES = {"=>": ">=", "=<": "<="}
 # Trailing `d`/`dt`/`t` (`'01JAN2020'd`, `'01JAN2020:00:00'dt`, `'09:00't`) is
 # SAS date/time/datetime literal syntax, common for an imputed-date value --
 # recognized here as a literal like any quoted string, or the same masking
@@ -264,6 +264,16 @@ def _bind_variable(raw_name, binding, statement_order, source, ctx, unresolved_n
     return node_id
 
 
+def _bind_ir_reference(reference, binding, statement_order, source, ctx):
+    unresolved_names = (
+        (reference.name.lstrip("&").rstrip(".").lower(),)
+        if reference.macro_unresolved else ()
+    )
+    return _bind_variable(
+        reference.name, binding, statement_order, source, ctx, unresolved_names
+    )
+
+
 def _resolve_variable_text(text, statement, let_events):
     masked_text, protected_literals = _protect_single_quoted(text)
     resolved, unresolved = resolve_text(
@@ -412,63 +422,41 @@ def _expand_numbered_range(match):
     )
 
 
-def _emit_assignment(statement, ctx, step_id, binding, let_events):
+def _emit_assignment(statement, ctx, step_id, binding, let_events, condition=None):
     resolved_text, unresolved_names = _resolve_variable_text(
         statement.text, statement, let_events
     )
-    match = _ASSIGNMENT_RE.match(resolved_text)
-    if not match:
-        return
-    target, rhs = match.group(1), match.group(2).strip()
     source = statement.as_source("data_step_assignment")
-    literal = _literal_value(rhs)
-    if literal is not None:
-        value, reads = literal, []
-    else:
-        value, reads = None, _rhs_identifiers(rhs)
-
-    for name in reads:
-        var_id = _bind_variable(
-            name, binding, statement.statement_order, source, ctx, unresolved_names
-        )
-        ctx.add_edge("reads_variable", var_id, step_id, source, value=None, operator=None)
-
-    target_id = _bind_variable(
-        target, binding, statement.statement_order, source, ctx, unresolved_names
+    assignment = _parse_assignment_ir(
+        resolved_text, source, unresolved_names, _literal_value, _rhs_identifiers,
+        condition=condition,
     )
-    ctx.add_edge("writes_variable", step_id, target_id, source, value=value, operator=None)
+    if assignment is None:
+        return
+    _emit_assignment_ir(
+        assignment,
+        ctx,
+        step_id,
+        source,
+        lambda reference: _bind_ir_reference(
+            reference, binding, statement.statement_order, source, ctx
+        ),
+    )
 
 
 def _condition_edges(condition_text, rule, statement, ctx, step_id, binding):
-    """Section spec's "smallest supported grammar": a single `var OP
-    (literal|var)` comparison. Anything else (AND/OR, IN, LIKE, functions)
-    falls through with no edge -- never a guessed partial capture."""
-    match = _COMPARISON_RE.match(condition_text.strip())
-    if not match:
-        return
-    lhs, operator_token, rhs = match.group(1), match.group(2), match.group(3).strip()
-    operator_token = _COMPARISON_OPERATOR_ALIASES.get(operator_token, operator_token)
     source = statement.as_source(rule)
-    literal = _literal_value(rhs)
-    if literal is not None:
-        value, operator, rhs_var = literal, operator_token.upper(), None
-    elif _BARE_IDENTIFIER_RE.match(rhs):
-        # codex-review fix: `operator` records that a comparison happened,
-        # independent of whether the comparand is a literal or a variable --
-        # the frozen contract's own wording is "null when there is no
-        # comparison" (specify-variable-node-and-edge-contract.md), and
-        # `if left = right` is one. Both sides carry the same operator; only
-        # `value` (the literal, if any) stays null here since neither side is
-        # a literal.
-        value, operator, rhs_var = None, operator_token.upper(), rhs
-    else:
-        return
-
-    lhs_id = _bind_variable(lhs, binding, statement.statement_order, source, ctx)
-    ctx.add_edge("reads_variable", lhs_id, step_id, source, value=value, operator=operator)
-    if rhs_var is not None:
-        rhs_id = _bind_variable(rhs_var, binding, statement.statement_order, source, ctx)
-        ctx.add_edge("reads_variable", rhs_id, step_id, source, value=None, operator=operator)
+    condition = _parse_condition_ir(condition_text, source, _literal_value)
+    _emit_condition_ir(
+        condition,
+        ctx,
+        step_id,
+        source,
+        lambda reference: _bind_ir_reference(
+            reference, binding, statement.statement_order, source, ctx
+        ),
+    )
+    return condition
 
 
 def _emit_deferred_construct_finding(statement, ctx, step_id, construct):
@@ -519,11 +507,12 @@ def _emit_rename(pair_text, statement, ctx, step_id, binding):
         ctx.add_edge("writes_variable", step_id, new_id, source, value=None, operator=None)
 
 
-def _emit_action(action, statement, ctx, step_id, binding, let_events):
+def _emit_action(action, statement, ctx, step_id, binding, let_events, condition=None):
     action = action.strip()
     if action:
         _emit_variable_edges(
             [replace(statement, text=action)], ctx, step_id, binding, let_events,
+            attached_condition=condition,
         )
 
 
@@ -610,7 +599,9 @@ def _emit_input_or_put(kind, body, statement, ctx, step_id, binding):
             ctx.add_edge(edge_type, var_id, step_id, source, value=None, operator=None)
 
 
-def _emit_variable_edges(statements, ctx, step_id, binding, let_events):
+def _emit_variable_edges(
+    statements, ctx, step_id, binding, let_events, attached_condition=None
+):
     """One DATA step's variable edges, in exact statement order (wayfinder:
     data-step-assignment-condition-variable-edges,
     data-step-keep-drop-rename-variable-edges). Arrays, DO loops, and
@@ -759,10 +750,16 @@ def _emit_variable_edges(statements, ctx, step_id, binding, let_events):
         if_match = _IF_HEAD_RE.match(text)
         if if_match:
             parts = _THEN_SPLIT_RE.split(if_match.group(1), maxsplit=1)
-            condition = parts[0].strip()
-            _condition_edges(condition, "data_step_if_condition", statement, ctx, step_id, binding)
+            condition_text = parts[0].strip()
+            condition_ir = _condition_edges(
+                condition_text, "data_step_if_condition", statement,
+                ctx, step_id, binding,
+            )
             if len(parts) > 1:
-                _emit_action(parts[1], statement, ctx, step_id, binding, let_events)
+                _emit_action(
+                    parts[1], statement, ctx, step_id, binding, let_events,
+                    condition=condition_ir,
+                )
             continue
         else_match = _ELSE_HEAD_RE.match(text)
         if else_match:
@@ -772,7 +769,10 @@ def _emit_variable_edges(statements, ctx, step_id, binding, let_events):
         if where_match:
             _condition_edges(where_match.group(1), "data_step_where_condition", statement, ctx, step_id, binding)
             continue
-        _emit_assignment(statement, ctx, step_id, binding, let_events)
+        _emit_assignment(
+            statement, ctx, step_id, binding, let_events,
+            condition=attached_condition,
+        )
 
 
 def apply(block, ctx, let_events, sort_by_fallback=None):
