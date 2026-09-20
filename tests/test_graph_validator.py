@@ -22,7 +22,12 @@ def edge(edge_id="edge:001", edge_type="reads_dataset", from_id="node:001", to_i
 
 
 def test_valid_graph_has_no_problems():
-    assert validate_graph(graph(nodes=[node()], edges=[edge()])) == []
+    assert validate_graph(
+        graph(
+            nodes=[node(), node("step:001", node_type="Step", label="DATA step")],
+            edges=[edge(from_id="node:001", to_id="step:001")],
+        )
+    ) == []
 
 
 def test_missing_nodes_collection_is_reported():
@@ -118,15 +123,55 @@ def test_unsupported_schema_version_is_reported():
     assert "0.2.0" in problems[0]
 
 
-def test_validator_does_not_reject_unregistered_types_or_endpoint_shapes():
+def test_unknown_node_type_is_reported_with_the_offending_id_and_type():
     problems = validate_graph(
         graph(
-            nodes=[node("left", node_type="FutureNode"), node("right")],
-            edges=[edge(edge_type="future_edge", from_id="left", to_id="right")],
+            nodes=[node("mystery:001", node_type="FutureNode")],
         )
     )
 
-    assert problems == []
+    assert len(problems) == 1
+    assert "mystery:001" in problems[0]
+    assert "FutureNode" in problems[0]
+
+
+def test_unknown_edge_type_is_reported_with_the_offending_id_and_type():
+    problems = validate_graph(
+        graph(
+            nodes=[node("left"), node("right", node_type="Step")],
+            edges=[edge(edge_id="mystery:001", edge_type="future_edge", from_id="left", to_id="right")],
+        )
+    )
+
+    assert len(problems) == 1
+    assert "mystery:001" in problems[0]
+    assert "future_edge" in problems[0]
+
+
+def test_illegal_endpoint_pair_is_reported_with_the_offending_id_and_type():
+    problems = validate_graph(
+        graph(
+            nodes=[node("left"), node("right")],
+            edges=[edge(edge_id="illegal:001", from_id="left", to_id="right")],
+        )
+    )
+
+    assert len(problems) == 1
+    assert "illegal:001" in problems[0]
+    assert "reads_dataset" in problems[0]
+
+
+def test_dangling_endpoint_skips_endpoint_pair_check():
+    problems = validate_graph(
+        graph(
+            nodes=[node("present")],
+            edges=[edge(edge_id="dangling:001", from_id="missing", to_id="present")],
+        )
+    )
+
+    assert len(problems) == 1
+    assert "dangling" in problems[0]
+    assert "missing" in problems[0]
 
 
 def demo():

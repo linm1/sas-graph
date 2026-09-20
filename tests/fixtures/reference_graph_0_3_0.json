@@ -1,0 +1,133 @@
+{
+  "schema_version": "0.3.0",
+  "schema": {
+    "producer": "sas-graph",
+    "producer_version": "0.2.0",
+    "capabilities": [
+      "dataset_lineage",
+      "variable_lineage"
+    ]
+  },
+  "run_id": "reference-0_3_0",
+  "run_status": "COMPLETE",
+  "main_programs": [
+    "main.sas"
+  ],
+  "setup_file": "setup.sas",
+  "nodes": [
+    {
+      "id": "setup:setup.sas",
+      "type": "SetupFile",
+      "label": "setup.sas"
+    },
+    {
+      "id": "program:000_main.sas",
+      "type": "Program",
+      "label": "main.sas"
+    },
+    {
+      "id": "step:001",
+      "type": "Step",
+      "label": "DATA step 001",
+      "step_kind": "DATA"
+    },
+    {
+      "id": "dataset:work.output",
+      "type": "Dataset",
+      "label": "work.output"
+    },
+    {
+      "id": "dataset:sdtm.input",
+      "type": "Dataset",
+      "label": "sdtm.input"
+    },
+    {
+      "id": "variable:work.output.id",
+      "type": "Variable",
+      "label": "id"
+    },
+    {
+      "id": "macrocall:001",
+      "type": "MacroCall",
+      "label": "%gm_example"
+    },
+    {
+      "id": "macroparam:001:inds",
+      "type": "MacroParameter",
+      "label": "inds"
+    },
+    {
+      "id": "macrovar:domain@1",
+      "type": "MacroVariable",
+      "label": "domain"
+    },
+    {
+      "id": "unknown_dataset:runtime",
+      "type": "UnknownDataset",
+      "label": "&runtime_output."
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge:001",
+      "type": "contains_step",
+      "from": "program:000_main.sas",
+      "to": "step:001"
+    },
+    {
+      "id": "edge:002",
+      "type": "reads_dataset",
+      "from": "dataset:sdtm.input",
+      "to": "step:001"
+    },
+    {
+      "id": "edge:003",
+      "type": "writes_dataset",
+      "from": "step:001",
+      "to": "dataset:work.output"
+    },
+    {
+      "id": "edge:004",
+      "type": "depends_on",
+      "from": "dataset:work.output",
+      "to": "dataset:sdtm.input"
+    },
+    {
+      "id": "edge:005",
+      "type": "reads_variable",
+      "from": "variable:work.output.id",
+      "to": "step:001"
+    },
+    {
+      "id": "edge:006",
+      "type": "writes_variable",
+      "from": "step:001",
+      "to": "variable:work.output.id"
+    },
+    {
+      "id": "edge:007",
+      "type": "calls_macro",
+      "from": "program:000_main.sas",
+      "to": "macrocall:001"
+    },
+    {
+      "id": "edge:008",
+      "type": "passes_parameter",
+      "from": "macrocall:001",
+      "to": "macroparam:001:inds"
+    },
+    {
+      "id": "edge:009",
+      "type": "resolves_to",
+      "from": "macroparam:001:inds",
+      "to": "unknown_dataset:runtime"
+    },
+    {
+      "id": "edge:010",
+      "type": "defines_macro_variable",
+      "from": "setup:setup.sas",
+      "to": "macrovar:domain@1"
+    }
+  ],
+  "findings": []
+}
