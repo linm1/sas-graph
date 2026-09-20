@@ -47,8 +47,10 @@ def _edge_result(edge, cycle=False):
 
 def _metadata(truncated, visited_count, continuation, limit_hit, depth_hit):
     frontier = []
+    seen = set()
     for node_id in continuation:
-        if node_id not in frontier:
+        if node_id not in seen:
+            seen.add(node_id)
             frontier.append(node_id)
     return {
         "truncated": truncated,

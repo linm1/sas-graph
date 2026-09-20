@@ -291,6 +291,34 @@ def test_query_bounds_defaults_apply_and_report_truncation():
     )
 
 
+def test_continuation_deduplicates_repeated_frontier_ids_in_order():
+    graph = {
+        "nodes": [
+            _node("dataset:start", "Dataset"),
+            _node("step:a", "Step"),
+            _node("step:b", "Step"),
+            _node("dataset:a1", "Dataset"),
+            _node("dataset:a2", "Dataset"),
+            _node("dataset:b1", "Dataset"),
+            _node("dataset:b2", "Dataset"),
+        ],
+        "edges": [
+            _edge("edge:1", "reads_dataset", "dataset:start", "step:a"),
+            _edge("edge:2", "reads_dataset", "dataset:start", "step:b"),
+            _edge("edge:3", "writes_dataset", "step:a", "dataset:a1"),
+            _edge("edge:4", "writes_dataset", "step:a", "dataset:a2"),
+            _edge("edge:5", "writes_dataset", "step:b", "dataset:b1"),
+            _edge("edge:6", "writes_dataset", "step:b", "dataset:b2"),
+        ],
+    }
+
+    result = trace_lineage(
+        graph, "dataset:start", "downstream", depth=0, limit=20
+    )
+
+    assert result["continuation"] == ["step:a", "step:b"]
+
+
 def test_query_bounds_reject_values_above_ticket_ceilings():
     graph = _linear_graph(2)
 
@@ -533,7 +561,26 @@ def test_bench_10k_graph_p95_per_primitive():
             graph, "variable:00000", depth=20, limit=5000, index=index
         ),
     }
+    truncated_queries = {
+        "search_nodes": lambda: search_nodes(
+            graph, "dataset", limit=200, index=index
+        ),
+        "trace_lineage": lambda: trace_lineage(
+            graph,
+            "dataset:00000",
+            "downstream",
+            depth=20,
+            limit=200,
+            index=index,
+        ),
+        "analyze_impact": lambda: analyze_impact(
+            graph, "variable:00000", depth=20, limit=200, index=index
+        ),
+    }
     warm_results = {name: query() for name, query in queries.items()}
+    truncated_results = {
+        name: query() for name, query in truncated_queries.items()
+    }
     reached_counts = {
         "search_nodes": len(warm_results["search_nodes"]["matches"]),
         "trace_lineage": len(warm_results["trace_lineage"]["downstream_nodes"]),
@@ -543,6 +590,12 @@ def test_bench_10k_graph_p95_per_primitive():
             + len(warm_results["analyze_impact"]["reached_operations"])
         ),
     }
+    continuation_lengths = {
+        name: len(result["continuation"])
+        for name, result in truncated_results.items()
+    }
+    assert all(result["truncated"] for result in truncated_results.values())
+    assert all(length > 0 for length in continuation_lengths.values())
     assert reached_counts["trace_lineage"] >= 1000
     assert reached_counts["analyze_impact"] >= 1000
 
@@ -565,11 +618,23 @@ def test_bench_10k_graph_p95_per_primitive():
             query()
             samples.append(time.perf_counter() - start)
         warm_p95 = _p95_ms(samples)
+        truncated_query = truncated_queries[name]
+        truncated_query()
+        gc.collect()
+        truncated_samples = []
+        for _ in range(sample_count):
+            start = time.perf_counter()
+            truncated_query()
+            truncated_samples.append(time.perf_counter() - start)
+        truncated_p95 = _p95_ms(truncated_samples)
         print(
             f"benchmark {name} warm_p95_ms={warm_p95:.3f} "
-            f"cold_p95_ms={cold_p95:.3f} reached={reached_counts[name]}"
+            f"truncated_p95_ms={truncated_p95:.3f} "
+            f"cold_p95_ms={cold_p95:.3f} reached={reached_counts[name]} "
+            f"continuation_len={continuation_lengths[name]}"
         )
         assert warm_p95 < 200
+        assert truncated_p95 < 200
 
 
 def demo():
@@ -579,6 +644,7 @@ def demo():
         test_graph_index_skips_nodes_without_ids,
         test_trace_lineage_marks_cycle_and_terminates,
         test_query_bounds_defaults_apply_and_report_truncation,
+        test_continuation_deduplicates_repeated_frontier_ids_in_order,
         test_query_bounds_reject_values_above_ticket_ceilings,
         test_search_and_impact_include_bounded_metadata,
         test_query_limits_bound_wide_graph_results_and_frontier,
