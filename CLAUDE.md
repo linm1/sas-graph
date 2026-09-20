@@ -18,9 +18,12 @@ Pipeline, in `run_pipeline.py`'s own order:
    `proc_sql`, `libname`, `macro_call`, `inactive`). Each only knows its own
    block kind and writes into the one shared `GraphContext`. **No rule module
    knows about another** — this boundary is deliberate, keep it that way.
-5. `graph_model.py` — `GraphContext` is the *only* place that mints node/edge
-   ids or appends to the three lists. `ctx.add_node` / `ctx.add_edge` /
-   `ctx.add_finding` are the only mutation surface; don't add a second one.
+5. `graph_model.py` — `GraphContext` is the canonical place to assemble nodes,
+   edges, and findings, but it is not the only mutation surface in the current
+   baseline: some existing rules mint ids or mutate context collections
+   directly, and rule code updates attributes in place. Preserve those paths
+   while avoiding new ones; `evidence` specifically is factory-only per ticket
+   11.
 6. `graph_io.py` / `manifest.py` / `renderer_mermaid.py` / `renderer_findings.py`
    — save, reload, render. `cli.py` always saves then reloads before
    rendering (section 4.2) — renderers are only ever tested against a
