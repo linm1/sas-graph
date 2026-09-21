@@ -271,6 +271,30 @@ def test_macro_dataset_names_resolve_at_the_sql_statement():
     assert datasets == {"dataset:work.ae_copy", "dataset:sdtm.ae"}
 
 
+def test_mixed_macro_target_does_not_taint_literal_sql_edges():
+    blocks, ctx, events = build(
+        "proc sql;\n"
+        "  create table &outlib..result as\n"
+        "  select a, b from work.src where c = 1;\n"
+        "quit;\n"
+    )
+    rules_proc_sql.apply(blocks[0], ctx, events)
+
+    reads_dataset = next(e for e in ctx.edges if e["type"] == "reads_dataset")
+    reads_variable = next(
+        e for e in ctx.edges
+        if e["type"] == "reads_variable"
+        and e["from"] == "variable:work.src.c"
+    )
+    writes_dataset = next(e for e in ctx.edges if e["type"] == "writes_dataset")
+
+    assert reads_dataset["from"] == "dataset:work.src"
+    assert reads_dataset["evidence"]["kind"] == "OBSERVED"
+    assert reads_variable["evidence"]["kind"] == "OBSERVED"
+    assert writes_dataset["to"] == "unknowndataset:&outlib..result"
+    assert writes_dataset["evidence"]["kind"] == "UNKNOWN"
+
+
 def test_unresolved_sql_dataset_name_stays_unknown():
     blocks, ctx, events = build(
         "proc sql;\n"

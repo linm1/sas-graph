@@ -434,6 +434,11 @@ def parse_condition(condition_text, source, literal_value, unresolved_names=()):
     )
     if len(comparisons) == 1:
         return comparisons[0]
+    operators = {comparison.operator.upper() for comparison in comparisons}
+    ascending = {"<", "<=", "LT", "LE"}
+    descending = {">", ">=", "GT", "GE"}
+    if not (operators <= ascending or operators <= descending):
+        return _unknown_condition(text, condition_span, unresolved_names)
     return IRComparisonChain(comparisons, condition_span)
 
 

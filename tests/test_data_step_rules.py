@@ -355,6 +355,24 @@ def test_resolved_macro_variable_in_data_target_produces_a_real_dataset():
     assert write["evidence"]["resolution"] == "EXACT"
 
 
+def test_mixed_macro_and_literal_data_targets_keep_literal_edges_observed():
+    blocks, ctx, events = build(
+        "data &outlib..out1 out2;\n  set work.src;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    evidence = {
+        (edge["type"], edge["from"], edge["to"]): edge["evidence"]["kind"]
+        for edge in ctx.edges
+        if edge["type"] in {"reads_dataset", "writes_dataset", "depends_on"}
+    }
+
+    assert evidence[("reads_dataset", "dataset:work.src", "step:001")] == "OBSERVED"
+    assert evidence[("writes_dataset", "step:001", "dataset:work.out2")] == "OBSERVED"
+    assert evidence[("depends_on", "dataset:work.out2", "dataset:work.src")] == "OBSERVED"
+    assert evidence[("writes_dataset", "step:001", "unknowndataset:&outlib..out1")] == "UNKNOWN"
+
+
 def test_assignment_writes_target_and_reads_rhs_named_variable():
     """User story 1: a plain assignment writes its target and reads any
     named RHS variable, each its own edge."""

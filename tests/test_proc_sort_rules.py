@@ -143,6 +143,26 @@ def test_unresolved_macro_variable_in_data_or_out_creates_unknown_dataset():
     assert reads == {unknown[0]["id"]}
 
 
+def test_mixed_macro_dupout_does_not_taint_literal_sort_edges():
+    blocks, ctx, events = build(
+        "proc sort data=work.src out=work.sorted "
+        "dupout=&duplib..dups nodupkey;\n"
+        "  by id;\nrun;\n"
+    )
+    rules_proc_sort.apply(blocks[0], ctx, events)
+
+    evidence = {
+        (edge["type"], edge["from"], edge["to"]): edge["evidence"]["kind"]
+        for edge in ctx.edges
+        if edge["type"] in {"reads_dataset", "writes_dataset", "depends_on"}
+    }
+
+    assert evidence[("reads_dataset", "dataset:work.src", "step:001")] == "OBSERVED"
+    assert evidence[("writes_dataset", "step:001", "dataset:work.sorted")] == "OBSERVED"
+    assert evidence[("depends_on", "dataset:work.sorted", "dataset:work.src")] == "OBSERVED"
+    assert evidence[("writes_dataset", "step:001", "unknowndataset:&duplib..dups")] == "UNKNOWN"
+
+
 def test_dupout_creates_writes_dataset_and_depends_on():
     """B4: `dupout=` names a second output of PROC SORT, same as `out=`."""
     blocks, ctx, events = build(

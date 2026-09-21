@@ -450,14 +450,14 @@ def _apply_statement(
         ),
     )
 
-    for source_id in source_ids:
+    for raw_source, source_id in zip(unique_raw_names, source_ids):
         source = statement.as_source(f"{rule}_source")
         ctx.add_edge(
             "reads_dataset", source_id, sql_statement_id,
             source,
             evidence=_edge_evidence(
                 ctx, source, source_id, sql_statement_id,
-                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+                macro_resolved=_has_macro_ref(raw_source),
             ),
         )
     write_kwargs = {}
@@ -468,17 +468,19 @@ def _apply_statement(
         "writes_dataset", sql_statement_id, target_id, target_source,
         evidence=_edge_evidence(
             ctx, target_source, sql_statement_id, target_id,
-            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            macro_resolved=_has_macro_ref(target_raw),
         ),
         **write_kwargs,
     )
-    for source_id in source_ids:
+    for raw_source, source_id in zip(unique_raw_names, source_ids):
         source = statement.as_source(rule)
         ctx.add_edge(
             "depends_on", target_id, source_id, source,
             evidence=_edge_evidence(
                 ctx, source, target_id, source_id,
-                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+                macro_resolved=(
+                    _has_macro_ref(target_raw) or _has_macro_ref(raw_source)
+                ),
             ),
         )
 
@@ -643,7 +645,7 @@ def _predicate_edges(
         "reads_variable", lhs_id, sql_statement_id, predicate_source,
         evidence=_edge_evidence(
             ctx, predicate_source, lhs_id, sql_statement_id,
-            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            macro_resolved=_has_macro_ref(lhs),
         ),
         value=value, operator=operator,
     )
@@ -655,7 +657,7 @@ def _predicate_edges(
             "reads_variable", rhs_id, sql_statement_id, predicate_source,
             evidence=_edge_evidence(
                 ctx, predicate_source, rhs_id, sql_statement_id,
-                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+                macro_resolved=_has_macro_ref(rhs_ref),
             ),
             value=None, operator=operator,
         )
@@ -739,7 +741,7 @@ def _apply_column_list_clause(
             "reads_variable", ref_id, sql_statement_id, column_source,
             evidence=_edge_evidence(
                 ctx, column_source, ref_id, sql_statement_id,
-                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+                macro_resolved=_has_macro_ref(ref),
             ),
             value=None, operator=None,
         )
@@ -799,7 +801,7 @@ def _extract_identifiers(expr):
 
 def _apply_expression_reads(
     ctx, statement, sql_statement_id, alias_map, source_ids, expr, rule,
-    unresolved_names,
+    unresolved_names, macro_source=None,
 ):
     refs = _extract_identifiers(expr)
     for ref in refs:
@@ -811,7 +813,9 @@ def _apply_expression_reads(
             "reads_variable", read_id, sql_statement_id, expression_source,
             evidence=_edge_evidence(
                 ctx, expression_source, read_id, sql_statement_id,
-                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+                macro_resolved=_has_macro_ref(
+                    macro_source if macro_source is not None else ref
+                ),
             ),
             value=None, operator=None,
         )
@@ -855,6 +859,7 @@ def _apply_insert_set(
             _apply_expression_reads(
                 ctx, statement, sql_statement_id, alias_map, source_ids,
                 _mask_quoted(_mask_literal_residue(expression)), rule, (),
+                macro_source=expression,
             )
         write_id = ctx.add_variable(target_raw, column)
         write_source = statement.as_source(rule)
@@ -862,7 +867,7 @@ def _apply_insert_set(
             "writes_variable", sql_statement_id, write_id, write_source,
             evidence=_edge_evidence(
                 ctx, write_source, sql_statement_id, write_id,
-                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+                macro_resolved=False,
             ),
             value=literal, operator=None,
         )
@@ -913,6 +918,7 @@ def _apply_insert_values(
             _apply_expression_reads(
                 ctx, statement, sql_statement_id, alias_map, source_ids,
                 _mask_quoted(_mask_literal_residue(expression)), rule, (),
+                macro_source=expression,
             )
         write_id = ctx.add_variable(target_raw, column)
         write_source = statement.as_source(rule)
@@ -920,7 +926,7 @@ def _apply_insert_values(
             "writes_variable", sql_statement_id, write_id, write_source,
             evidence=_edge_evidence(
                 ctx, write_source, sql_statement_id, write_id,
-                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+                macro_resolved=False,
             ),
             value=literal, operator=None,
         )
@@ -928,7 +934,7 @@ def _apply_insert_values(
 
 def _apply_bare_select_column(
     ctx, statement, sql_statement_id, alias_map, source_ids, target_raw, expr, alias,
-    write_name=None,
+    write_name=None, original_column=None,
 ):
     rule = "proc_sql_select_column"
     read_id = _resolve_column_ref(ctx, statement, alias_map, source_ids, expr)
@@ -937,7 +943,9 @@ def _apply_bare_select_column(
         "reads_variable", read_id, sql_statement_id, select_source,
         evidence=_edge_evidence(
             ctx, select_source, read_id, sql_statement_id,
-            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            macro_resolved=_has_macro_ref(
+                original_column if original_column is not None else expr
+            ),
         ),
         value=None, operator=None,
     )
@@ -947,7 +955,12 @@ def _apply_bare_select_column(
         "writes_variable", sql_statement_id, write_id, select_source,
         evidence=_edge_evidence(
             ctx, select_source, sql_statement_id, write_id,
-            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            macro_resolved=(
+                alias is None
+                and _has_macro_ref(
+                    original_column if original_column is not None else expr
+                )
+            ),
         ),
         value=None, operator=None,
     )
@@ -973,7 +986,7 @@ def _apply_computed_select_column(
         return
     refs = _apply_expression_reads(
         ctx, statement, sql_statement_id, alias_map, source_ids, expr, rule,
-        unresolved_names,
+        unresolved_names, macro_source=original_column,
     )
     # codex-review fix: a bare literal (`select 'Y' as flag from ...`, zero
     # identifiers) is the SQL analogue of a DATA-step `flag = 'Y';` -- the
@@ -990,7 +1003,7 @@ def _apply_computed_select_column(
         "writes_variable", sql_statement_id, write_id, expression_source,
         evidence=_edge_evidence(
             ctx, expression_source, sql_statement_id, write_id,
-            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            macro_resolved=False,
         ),
         value=literal, operator=None,
     )
@@ -1080,7 +1093,7 @@ def _apply_case_select_column(
             result_expr = _mask_quoted(_mask_literal_residue(result_expr))
             _apply_expression_reads(
                 ctx, statement, sql_statement_id, alias_map, source_ids,
-                result_expr, rule, unresolved_names,
+                result_expr, rule, unresolved_names, macro_source=result_expr,
             )
 
     write_name = write_name if write_name is not None else alias
@@ -1090,7 +1103,7 @@ def _apply_case_select_column(
         "writes_variable", sql_statement_id, write_id, case_source,
         evidence=_edge_evidence(
             ctx, case_source, sql_statement_id, write_id,
-            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            macro_resolved=False,
         ),
         value=None, operator=None,
     )
@@ -1187,7 +1200,7 @@ def _apply_select_columns(
         ):
             _apply_bare_select_column(
                 ctx, statement, sql_statement_id, alias_map, source_ids, target_raw,
-                expr, alias, write_name,
+                expr, alias, write_name, original_column,
             )
         else:
             _apply_computed_select_column(

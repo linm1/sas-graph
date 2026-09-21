@@ -187,6 +187,10 @@ def _resolve_dataset_list(raw, statement_order, let_events, source, ctx):
     """Resolve a space-separated dataset list, reporting each unresolved name
     as an `UnknownDataset` (section 15.6) instead of guessing.
 
+    Each result retains the raw token that produced the node id so callers can
+    classify evidence per endpoint when one statement mixes macro and literal
+    dataset names.
+
     Dataset options (`sdtm.ae (where=(aeser="Y"))`) are stripped first --
     section 12.9 captures WHERE as step-level metadata separately, so a
     dataset-level option group here is not read for its own content, only
@@ -217,9 +221,9 @@ def _resolve_dataset_list(raw, statement_order, let_events, source, ctx):
                 source,
                 affected_nodes=[node_id],
             )
-            resolved_ids.append(node_id)
+            resolved_ids.append((node_id, token))
         else:
-            resolved_ids.append(ctx.add_dataset(text))
+            resolved_ids.append((ctx.add_dataset(text), token))
     return resolved_ids
 
 
@@ -874,10 +878,11 @@ def apply(block, ctx, let_events, sort_by_fallback=None):
     # `data work.&domain._out;` must produce an UnknownDataset + finding, the
     # same posture SET/MERGE already have, not a Dataset node whose id bakes
     # in a literal unresolved `&domain.` reference.
-    output_ids = _resolve_dataset_list(
+    output_entries = _resolve_dataset_list(
         " ".join(targets), opener.statement_order, let_events,
         opener.as_source("data_step_output"), ctx,
     )
+    output_ids = [dataset_id for dataset_id, _token in output_entries]
 
     step_id = ctx.next_step_id()
     ctx.add_node(step_id, "Step", f"DATA step {step_id.split(':')[1]}", step_kind="DATA",
@@ -892,14 +897,17 @@ def apply(block, ctx, let_events, sort_by_fallback=None):
 
         if set_match:
             source = statement.as_source("data_step_set")
-            set_inputs.extend((dataset_id, source) for dataset_id in _resolve_dataset_list(
-                set_match.group(1), statement.statement_order, let_events, source, ctx
-            ))
+            set_inputs.extend(
+                (dataset_id, source, token)
+                for dataset_id, token in _resolve_dataset_list(
+                    set_match.group(1), statement.statement_order, let_events, source, ctx
+                )
+            )
         elif merge_match:
             source = statement.as_source("data_step_merge")
             merge_inputs.extend(
-                (dataset_id, source, statement.statement_order)
-                for dataset_id in _resolve_dataset_list(
+                (dataset_id, source, statement.statement_order, token)
+                for dataset_id, token in _resolve_dataset_list(
                     merge_match.group(1), statement.statement_order, let_events, source, ctx
                 )
             )
@@ -907,35 +915,35 @@ def apply(block, ctx, let_events, sort_by_fallback=None):
             merge_by = by_vars(by_match.group(1))
             merge_by_source = statement.as_source("merge_by_is_prefix_of_sort_by")
 
-    input_ids = [*set_inputs, *((dataset_id, source) for dataset_id, source, _ in merge_inputs)]
+    input_ids = [
+        *set_inputs,
+        *((dataset_id, source, token) for dataset_id, source, _order, token in merge_inputs),
+    ]
 
-    for input_id, input_source in input_ids:
+    for input_id, input_source, input_token in input_ids:
         ctx.add_edge(
             "reads_dataset", input_id, step_id, input_source,
             evidence=_edge_evidence(
                 ctx, input_source, input_id, step_id,
-                macro_sources=(input_source.get("original_text"),),
+                macro_sources=(input_token,),
             ),
         )
 
-    for output_id in output_ids:
+    for output_id, output_token in output_entries:
         output_source = block.as_source("data_step_output")
         ctx.add_edge(
             "writes_dataset", step_id, output_id, output_source,
             evidence=_edge_evidence(
                 ctx, output_source, step_id, output_id,
-                macro_sources=(opener.original_text,),
+                macro_sources=(output_token,),
             ),
         )
-        for input_id, input_source in input_ids:
+        for input_id, input_source, input_token in input_ids:
             ctx.add_edge(
                 "depends_on", output_id, input_id, input_source,
                 evidence=_edge_evidence(
                     ctx, input_source, output_id, input_id,
-                    macro_sources=(
-                        input_source.get("original_text"),
-                        opener.original_text,
-                    ),
+                    macro_sources=(output_token, input_token),
                 ),
             )
             if input_id == output_id:
@@ -943,7 +951,10 @@ def apply(block, ctx, let_events, sort_by_fallback=None):
 
     if merge_inputs and merge_by is not None:
         _check_merge_sort_prefix(
-            [(dataset_id, merge_order) for dataset_id, _source, merge_order in merge_inputs],
+            [
+                (dataset_id, merge_order)
+                for dataset_id, _source, merge_order, _token in merge_inputs
+            ],
             merge_by,
             merge_by_source,
             ctx,
@@ -1039,20 +1050,20 @@ def _apply_null_data(block, ctx, let_events):
     for statement in block.statements[1:]:
         set_match = _SET_RE.match(statement.text)
         if set_match:
-            input_ids = _resolve_dataset_list(
+            input_entries = _resolve_dataset_list(
                 set_match.group(1),
                 statement.statement_order,
                 let_events,
                 statement.as_source("data_step_set"),
                 ctx,
             )
-            for input_id in input_ids:
+            for input_id, input_token in input_entries:
                 source = statement.as_source("data_step_set")
                 ctx.add_edge(
                     "reads_dataset", input_id, step_id, source,
                     evidence=_edge_evidence(
                         ctx, source, input_id, step_id,
-                        macro_sources=(source.get("original_text"),),
+                        macro_sources=(input_token,),
                     ),
                 )
 

@@ -123,6 +123,18 @@ def test_chained_condition_keeps_each_comparison_and_middle_reference():
     ] == ["a", "b", "b", "c"]
 
 
+def test_direction_inconsistent_chains_are_unknown():
+    for text in ("a <= b > c", "a >= b <= c"):
+        condition = parse_condition(text, SOURCE, _literal_value)
+        assert type(condition) is IRUnknownExpression, repr(text)
+
+
+def test_same_direction_chains_remain_comparison_chains():
+    for text in ("a < b < c", "a > b > c"):
+        condition = parse_condition(text, SOURCE, _literal_value)
+        assert type(condition) is IRComparisonChain, repr(text)
+
+
 def test_expression_and_condition_spans_keep_their_source_text():
     source = {
         "file": "demo.sas",
@@ -158,6 +170,9 @@ STANDALONE_TESTS = [
     test_tokenizer_table,
     test_name_and_date_literal_nodes,
     test_condition_table,
+    test_chained_condition_keeps_each_comparison_and_middle_reference,
+    test_direction_inconsistent_chains_are_unknown,
+    test_same_direction_chains_remain_comparison_chains,
     test_iter_variable_refs_table,
 ]
 

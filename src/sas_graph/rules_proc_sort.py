@@ -119,17 +119,18 @@ def apply(block, ctx, let_events, source_order=None):
 
     data_source = block.as_source("proc_sort_data")
     out_source = block.as_source("proc_sort_out")
-    macro_resolved = _has_macro_ref(opener.original_text)
     ctx.add_edge(
         "reads_dataset", input_id, step_id, data_source,
         evidence=_edge_evidence(
-            ctx, data_source, input_id, step_id, macro_resolved=macro_resolved,
+            ctx, data_source, input_id, step_id,
+            macro_resolved=_has_macro_ref(data_match.group(1)),
         ),
     )
     ctx.add_edge(
         "writes_dataset", step_id, output_id, out_source,
         evidence=_edge_evidence(
-            ctx, out_source, step_id, output_id, macro_resolved=macro_resolved,
+            ctx, out_source, step_id, output_id,
+            macro_resolved=_has_macro_ref(output_raw),
         ),
     )
 
@@ -141,7 +142,7 @@ def apply(block, ctx, let_events, source_order=None):
             "writes_dataset", step_id, dupout_id, dupout_source,
             evidence=_edge_evidence(
                 ctx, dupout_source, step_id, dupout_id,
-                macro_resolved=macro_resolved,
+                macro_resolved=_has_macro_ref(dupout_match.group(1)),
             ),
         )
         if dupout_id != input_id:
@@ -149,7 +150,10 @@ def apply(block, ctx, let_events, source_order=None):
                 "depends_on", dupout_id, input_id, dupout_source,
                 evidence=_edge_evidence(
                     ctx, dupout_source, dupout_id, input_id,
-                    macro_resolved=macro_resolved,
+                    macro_resolved=(
+                        _has_macro_ref(dupout_match.group(1))
+                        or _has_macro_ref(data_match.group(1))
+                    ),
                 ),
             )
 
@@ -164,7 +168,10 @@ def apply(block, ctx, let_events, source_order=None):
             "depends_on", output_id, input_id, out_source,
             evidence=_edge_evidence(
                 ctx, out_source, output_id, input_id,
-                macro_resolved=macro_resolved,
+                macro_resolved=(
+                    _has_macro_ref(output_raw)
+                    or _has_macro_ref(data_match.group(1))
+                ),
             ),
         )
 
