@@ -53,6 +53,7 @@ def test_registry_contains_the_emitted_edge_vocabulary_without_dead_types():
     assert "conflicts_with" not in EDGE_TYPES
     assert "depends_on" in EDGE_TYPES
     assert {"derives", "conditioned_by"} <= EDGE_TYPES
+    assert {"joins_on", "filters_dataset", "groups_by", "sorts_by"} <= EDGE_TYPES
 
 
 def test_derivation_endpoints_mirror_writes_and_reverse_its_direction():
@@ -61,6 +62,17 @@ def test_derivation_endpoints_mirror_writes_and_reverse_its_direction():
         (target, source)
         for source, target in EDGE_ENDPOINTS["writes_variable"]
     )
+
+
+def test_sql_selection_edges_point_from_source_variable_to_sql_statement():
+    expected = frozenset(
+        {
+            ("Variable", "SqlStatement"),
+            ("UnknownVariable", "SqlStatement"),
+        }
+    )
+    for edge_type in ("joins_on", "filters_dataset", "groups_by", "sorts_by"):
+        assert EDGE_ENDPOINTS[edge_type] == expected
 
 
 def test_dataset_and_variable_endpoint_aliases_expand_to_unknown_types():

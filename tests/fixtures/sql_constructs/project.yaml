@@ -1,0 +1,9 @@
+# Synthetic PROC SQL construct coverage for the B2 IR and resolver.
+main_program:
+  - sql_constructs.sas
+setup_file: setup.sas
+
+allowed_roots:
+  - .
+
+output_dir: graph_runs

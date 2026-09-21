@@ -42,6 +42,20 @@ _VARIABLE_WRITE_ENDPOINTS = frozenset(
     }
 )
 
+# SQL selection-reference edges point from the exact source Variable (or an
+# explicitly represented UnknownVariable for future conservative emitters) to
+# the consuming SqlStatement.  The direction mirrors ``reads_variable`` and
+# ``conditioned_by``: a source column is the dependency, the SQL operation is
+# the consumer.  B2's emitter only creates these edges for exact Variable
+# bindings; the UnknownVariable pairs keep the registry honest for graph
+# fragments that preserve unresolved IR explicitly.
+_SQL_REFERENCE_ENDPOINTS = frozenset(
+    {
+        ("Variable", "SqlStatement"),
+        ("UnknownVariable", "SqlStatement"),
+    }
+)
+
 
 EDGE_ENDPOINTS = {
     "reads_variable": frozenset(
@@ -59,6 +73,16 @@ EDGE_ENDPOINTS = {
     "conditioned_by": frozenset(
         (target, source) for source, target in _VARIABLE_WRITE_ENDPOINTS
     ),
+    # Variable -> SqlStatement: the column participates in an explicit JOIN
+    # predicate; ``join_kind`` is an additive edge attribute when known.
+    "joins_on": _SQL_REFERENCE_ENDPOINTS,
+    # Variable -> SqlStatement: the column is an exact WHERE/HAVING filter
+    # reference for a source dataset in the SQL statement.
+    "filters_dataset": _SQL_REFERENCE_ENDPOINTS,
+    # Variable -> SqlStatement: the column is an exact GROUP BY key.
+    "groups_by": _SQL_REFERENCE_ENDPOINTS,
+    # Variable -> SqlStatement: the column is an exact ORDER BY key.
+    "sorts_by": _SQL_REFERENCE_ENDPOINTS,
     "reads_dataset": frozenset(
         {
             (source, target)
