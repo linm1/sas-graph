@@ -1,9 +1,18 @@
 """Standalone tests for the DATA-step assignment IR."""
 
+import sys
+from pathlib import Path
+
+
+SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
+if __name__ == "__main__" and str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
+
 from sas_graph.ir import (
     IRAssignment,
     IRBinaryOp,
     IRComparison,
+    IRComparisonChain,
     IRLiteral,
     IRUnknownExpression,
     IRVariableRef,
@@ -24,6 +33,21 @@ def test_iter_variable_refs_walks_assignment_and_condition():
     assignment = IRAssignment(target, value, condition, span)
 
     assert list(iter_variable_refs(assignment)) == [target, value.left, condition.left]
+
+
+def test_iter_variable_refs_walks_comparison_chain_links():
+    span = SourceSpan("demo.sas", 3, 3, 2, "if a <= b <= c then x = 1;")
+    chain = IRComparisonChain(
+        (
+            IRComparison(IRVariableRef("a"), "<=", IRVariableRef("b"), span),
+            IRComparison(IRVariableRef("b"), "<=", IRVariableRef("c"), span),
+        ),
+        span,
+    )
+
+    assert [reference.name for reference in iter_variable_refs(chain)] == [
+        "a", "b", "b", "c",
+    ]
 
 
 def test_unknown_expression_keeps_exact_text_and_span():

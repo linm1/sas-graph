@@ -766,6 +766,41 @@ def test_if_then_assignment_emits_derivation_and_conditioned_by_edges():
     assert len([edge for edge in ctx.edges if edge["type"] == "writes_variable"]) == 1
 
 
+def test_chained_if_condition_emits_each_distinct_conditioned_by_edge():
+    blocks, ctx, events = build(
+        "data work.a;\n"
+        "  set adam.adae;\n"
+        "  if trtsdt <= aestdt <= trtedt then trtemfl = 'Y';\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    derives = [edge for edge in ctx.edges if edge["type"] == "derives"]
+    conditioned = [edge for edge in ctx.edges if edge["type"] == "conditioned_by"]
+    assert len(derives) == 1
+    assert derives[0]["from"] == "step:001"
+    assert derives[0]["to"] == "variable:work.a.trtemfl"
+    assert {
+        (edge["from"], edge["to"], edge["condition_text"])
+        for edge in conditioned
+    } == {
+        ("variable:work.a.trtsdt", "step:001", "trtsdt <= aestdt <= trtedt"),
+        ("variable:work.a.aestdt", "step:001", "trtsdt <= aestdt <= trtedt"),
+        ("variable:work.a.trtedt", "step:001", "trtsdt <= aestdt <= trtedt"),
+    }
+    assert [
+        (edge["from"], edge["operator"], edge["value"])
+        for edge in ctx.edges
+        if edge["type"] == "reads_variable"
+        and edge["source"]["rule"] == "data_step_if_condition"
+    ] == [
+        ("variable:work.a.trtsdt", "<=", None),
+        ("variable:work.a.aestdt", "<=", None),
+        ("variable:work.a.aestdt", "<=", None),
+        ("variable:work.a.trtedt", "<=", None),
+    ]
+
+
 def test_derivation_edges_deduplicate_repeated_condition_variables():
     blocks, ctx, events = build(
         "data work.a;\n"

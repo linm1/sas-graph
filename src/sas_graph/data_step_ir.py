@@ -12,6 +12,7 @@ from .ir import (
     IRAssignment,
     IRBinaryOp,
     IRComparison,
+    IRComparisonChain,
     IRLiteral,
     IRUnaryOp,
     IRUnknownExpression,
@@ -22,12 +23,14 @@ from .ir import (
 
 
 _ASSIGNMENT_RE = re.compile(r"^(&?[A-Za-z_]\w*\.?)\s*=\s*(.+?);?$")
-_COMPARISON_RE = re.compile(
-    r"^([A-Za-z_]\w*)\s*(=>|=<|~=|\^=|>=|<=|>|<|=|\beq\b|\bne\b|\bgt\b|\blt\b|\bge\b|\ble\b)\s*(.+)$",
-    re.IGNORECASE,
-)
+_COMPARISON_SYMBOLS = {"=>", "=<", "~=", "^=", ">=", "<=", ">", "<", "="}
 _COMPARISON_OPERATOR_ALIASES = {"=>": ">=", "=<": "<="}
+_COMPARISON_WORDS = {"eq", "ne", "gt", "lt", "ge", "le"}
 _BARE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$")
+_CONDITION_IDENTIFIER_EXCLUDED = {
+    "not", "and", "or", "eq", "ne", "gt", "lt", "ge", "le", "of",
+    "_n_", "_error_",
+}
 _MAX_PARENTHESIS_DEPTH = 100
 
 _BINARY_PRECEDENCE = {
@@ -268,6 +271,53 @@ def _unknown_refs(rhs, unresolved_names, span, rhs_identifiers):
     )
 
 
+def _condition_identifiers(text):
+    """Return condition variable names without treating calls as variables."""
+
+    tokens = _tokenize(text)
+    references = []
+    for index, (kind, token) in enumerate(tokens):
+        if kind != "word" or token.lower() in _CONDITION_IDENTIFIER_EXCLUDED:
+            continue
+        if index + 1 < len(tokens) and tokens[index + 1][0] == "(":
+            continue
+        references.append(token)
+    return list(dict.fromkeys(references))
+
+
+def _condition_operand(tokens, index, condition_span, literal_value):
+    if index >= len(tokens):
+        return None, index
+    kind, token = tokens[index]
+    if (
+        kind == "operator"
+        and token == "-"
+        and index + 1 < len(tokens)
+        and tokens[index + 1][0] == "number"
+    ):
+        token = "-" + tokens[index + 1][1]
+        index += 1
+        kind = "number"
+    if kind in {"atom", "number"}:
+        value = literal_value(token)
+        if value is not None:
+            return IRLiteral(value, condition_span), index + 1
+        return None, index + 1
+    if kind == "word" and _BARE_IDENTIFIER_RE.match(token):
+        return IRVariableRef(token, False, condition_span), index + 1
+    return None, index + 1
+
+
+def _unknown_condition(text, condition_span, unresolved_names):
+    return IRUnknownExpression(
+        text,
+        condition_span,
+        _unknown_refs(
+            text, unresolved_names, condition_span, _condition_identifiers,
+        ),
+    )
+
+
 def parse_assignment(
     statement_text,
     source,
@@ -302,28 +352,57 @@ def parse_assignment(
     return IRAssignment(target_ref, expression, condition, span)
 
 
-def parse_condition(condition_text, source, literal_value):
-    """Parse the one-comparison condition grammar used by the old emitter."""
+def parse_condition(condition_text, source, literal_value, unresolved_names=()):
+    """Parse a single comparison or a chained range comparison."""
 
     span = source_span(source)
     text = condition_text.strip()
     condition_span = source_span(span, text)
-    match = _COMPARISON_RE.match(text)
-    if not match:
-        return IRUnknownExpression(text, condition_span)
-    lhs, operator, rhs = match.group(1), match.group(2), match.group(3).strip()
-    operator = _COMPARISON_OPERATOR_ALIASES.get(operator, operator).upper()
-    lhs_ref = IRVariableRef(lhs, False, condition_span)
-    value = literal_value(rhs)
-    if value is not None:
-        return IRComparison(
-            lhs_ref, operator, IRLiteral(value, condition_span), condition_span,
+    tokens = _tokenize(text)
+    if not tokens:
+        return _unknown_condition(text, condition_span, unresolved_names)
+
+    operands = []
+    index = 0
+    operand, index = _condition_operand(
+        tokens, index, condition_span, literal_value,
+    )
+    if operand is None:
+        return _unknown_condition(text, condition_span, unresolved_names)
+    operands.append(operand)
+    operators = []
+    while index < len(tokens):
+        kind, token = tokens[index]
+        if kind == "operator" and token in _COMPARISON_SYMBOLS:
+            operator = token
+        elif kind == "word" and token.lower() in _COMPARISON_WORDS:
+            operator = token
+        else:
+            return _unknown_condition(text, condition_span, unresolved_names)
+        operators.append(operator)
+        operand, index = _condition_operand(
+            tokens, index + 1, condition_span, literal_value,
         )
-    if _BARE_IDENTIFIER_RE.match(rhs):
-        return IRComparison(
-            lhs_ref, operator, IRVariableRef(rhs, False, condition_span), condition_span,
+        if operand is None:
+            return _unknown_condition(text, condition_span, unresolved_names)
+        operands.append(operand)
+    if not operators:
+        return _unknown_condition(text, condition_span, unresolved_names)
+
+    comparisons = tuple(
+        IRComparison(
+            operands[index],
+            _COMPARISON_OPERATOR_ALIASES.get(
+                operators[index].lower(), operators[index],
+            ).upper(),
+            operands[index + 1],
+            condition_span,
         )
-    return IRUnknownExpression(text, condition_span)
+        for index in range(len(operators))
+    )
+    if len(comparisons) == 1:
+        return comparisons[0]
+    return IRComparisonChain(comparisons, condition_span)
 
 
 def _add_unknown_finding(ctx, source, expression, step_id):
@@ -370,7 +449,7 @@ def emit_assignment(
         value=literal, operator=None,
     )
 
-    if not getattr(ctx, "derivation_v1", True):
+    if not ctx.derivation_v1:
         return
 
     expression_span = getattr(value, "source_span", None)
@@ -385,7 +464,7 @@ def emit_assignment(
     )
 
     condition = assignment.condition
-    if not isinstance(condition, IRComparison):
+    if not isinstance(condition, (IRComparison, IRComparisonChain)):
         return
 
     condition_span = getattr(condition, "source_span", None)
@@ -412,17 +491,23 @@ def emit_condition(condition, ctx, step_id, source, bind_variable):
     if isinstance(condition, IRUnknownExpression):
         _add_unknown_finding(ctx, source, condition, step_id)
         return
-    if not isinstance(condition, IRComparison):
+    if isinstance(condition, IRComparison):
+        comparisons = (condition,)
+    elif isinstance(condition, IRComparisonChain):
+        comparisons = condition.comparisons
+    else:
         return
-    literal = condition.right.value if isinstance(condition.right, IRLiteral) else None
-    left_id = bind_variable(condition.left)
-    ctx.add_edge(
-        "reads_variable", left_id, step_id, source,
-        value=literal, operator=condition.operator,
-    )
-    if isinstance(condition.right, IRVariableRef):
-        right_id = bind_variable(condition.right)
-        ctx.add_edge(
-            "reads_variable", right_id, step_id, source,
-            value=None, operator=condition.operator,
-        )
+    for comparison in comparisons:
+        literal = comparison.right.value if isinstance(comparison.right, IRLiteral) else None
+        if isinstance(comparison.left, IRVariableRef):
+            left_id = bind_variable(comparison.left)
+            ctx.add_edge(
+                "reads_variable", left_id, step_id, source,
+                value=literal, operator=comparison.operator,
+            )
+        if isinstance(comparison.right, IRVariableRef):
+            right_id = bind_variable(comparison.right)
+            ctx.add_edge(
+                "reads_variable", right_id, step_id, source,
+                value=None, operator=comparison.operator,
+            )

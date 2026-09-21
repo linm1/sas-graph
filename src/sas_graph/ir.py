@@ -71,6 +71,14 @@ class IRComparison:
 
 
 @dataclass(frozen=True)
+class IRComparisonChain:
+    """A sequence of comparisons sharing adjacent operands."""
+
+    comparisons: Tuple[IRComparison, ...]
+    source_span: Optional[SourceSpan] = None
+
+
+@dataclass(frozen=True)
 class IRUnknownExpression:
     """An expression outside the deliberately small supported grammar."""
 
@@ -90,7 +98,7 @@ class IRUnknownExpression:
 class IRAssignment:
     target: IRVariableRef
     value: "IRExpression"
-    condition: Optional[IRComparison] = None
+    condition: Optional[Union[IRComparison, IRComparisonChain]] = None
     source_span: Optional[SourceSpan] = None
 
     @property
@@ -105,6 +113,7 @@ IRExpression = Union[
     IRUnaryOp,
     IRBinaryOp,
     IRComparison,
+    IRComparisonChain,
     IRUnknownExpression,
 ]
 
@@ -122,6 +131,9 @@ def iter_variable_refs(node) -> Iterator[IRVariableRef]:
         yield from iter_variable_refs(node.condition)
     elif isinstance(node, (IRUnaryOp,)):
         yield from iter_variable_refs(node.operand)
+    elif isinstance(node, IRComparisonChain):
+        for comparison in node.comparisons:
+            yield from iter_variable_refs(comparison)
     elif isinstance(node, (IRBinaryOp, IRComparison)):
         yield from iter_variable_refs(node.left)
         yield from iter_variable_refs(node.right)

@@ -12,6 +12,7 @@ from sas_graph.data_step_ir import _tokenize, parse_assignment, parse_condition
 from sas_graph.ir import (
     IRBinaryOp,
     IRComparison,
+    IRComparisonChain,
     IRLiteral,
     IRUnaryOp,
     IRUnknownExpression,
@@ -99,13 +100,27 @@ def test_name_and_date_literal_nodes():
 def test_condition_table():
     cases = [
         ("a > 1", IRComparison, ["a"]),
-        ("a > 1 and b < 2", IRUnknownExpression, []),
+        ("eq = 1", IRComparison, ["eq"]),
+        ("a = ge", IRComparison, ["a", "ge"]),
+        ("a > 1 and b < 2", IRUnknownExpression, ["a", "b"]),
     ]
     for text, expected_type, expected_references in cases:
         condition = parse_condition(text, SOURCE, _literal_value)
         assert type(condition) is expected_type, repr(text)
         references = [reference.name for reference in iter_variable_refs(condition)]
         assert references == expected_references, repr(text)
+
+
+def test_chained_condition_keeps_each_comparison_and_middle_reference():
+    condition = parse_condition("a <= b <= c", SOURCE, _literal_value)
+
+    assert type(condition) is IRComparisonChain
+    assert [comparison.operator for comparison in condition.comparisons] == [
+        "<=", "<=",
+    ]
+    assert [
+        reference.name for reference in iter_variable_refs(condition)
+    ] == ["a", "b", "b", "c"]
 
 
 def test_expression_and_condition_spans_keep_their_source_text():
