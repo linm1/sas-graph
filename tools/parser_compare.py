@@ -35,6 +35,7 @@ PARSER_REQUIREMENTS = (
     "tree-sitter-sas=={}".format(TREE_SITTER_SAS_VERSION),
     "tree-sitter=={}".format(TREE_SITTER_VERSION),
 )
+SUBPROCESS_TIMEOUT_SECONDS = 5 * 60
 MACRO_REF_RE = re.compile(r"&[A-Za-z_]\w*\.?", re.IGNORECASE)
 MACRO_CALL_RE = re.compile(r"%[A-Za-z_]\w*\(", re.IGNORECASE)
 BOUNDARY_SUFFIXES = ("_statement", "_header")
@@ -80,7 +81,9 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _run(command: Sequence[str]) -> subprocess.CompletedProcess:
+def _run(
+    command: Sequence[str], *, timeout: float
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         list(command),
         stdout=subprocess.PIPE,
@@ -89,6 +92,7 @@ def _run(command: Sequence[str]) -> subprocess.CompletedProcess:
         encoding="utf-8",
         errors="replace",
         check=False,
+        timeout=timeout,
     )
 
 
@@ -679,7 +683,8 @@ def _parent_run(args: argparse.Namespace, repo_root: Path) -> int:
                     "--no-input",
                     "--only-binary=:all:",
                     *PARSER_REQUIREMENTS,
-                ]
+                ],
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
             if install.returncode != 0:
                 return _skip(
@@ -696,7 +701,8 @@ def _parent_run(args: argparse.Namespace, repo_root: Path) -> int:
                     str(repo_root),
                     "--format",
                     "json",
-                ]
+                ],
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
             if child.returncode != 0:
                 return _skip(
@@ -722,6 +728,13 @@ def _parent_run(args: argparse.Namespace, repo_root: Path) -> int:
             else:
                 print(_markdown(payload))
             return 0
+    except subprocess.TimeoutExpired as error:
+        return _skip(
+            "the parser comparison timed out after {} seconds; the comparison "
+            "was not run. Timed-out command: {!r}".format(
+                SUBPROCESS_TIMEOUT_SECONDS, error.cmd
+            )
+        )
     except Exception as error:  # pragma: no cover - platform/bootstrap guard
         return _skip(
             "could not build the throwaway virtualenv; the comparison was not run. "

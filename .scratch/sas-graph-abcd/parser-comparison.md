@@ -93,8 +93,10 @@ Python 3.10+ installation cannot be added to project install requirements.
 The gold corpus contained 26 committed `.sas` files and 3,391 UTF-8 bytes. The
 legacy frontend emitted 95 statements, 5 comment records, and 5
 `unterminated_comment` findings. Tree-sitter emitted 101 grammar boundary
-spans, had 86 exact token-byte matches to legacy statements (86/95 = 90.5%),
-and reported 2 `ERROR` nodes plus 3 missing nodes.
+spans, had 86 exact token-byte matches to legacy statements (86/95 = 90.5% of
+legacy statements; 86/101 = 85.1% of Tree-sitter boundaries, leaving 15
+unmatched Tree-sitter boundaries), and reported 2 `ERROR` nodes plus 3 missing
+nodes.
 
 ### Statement boundaries and source spans
 
@@ -243,10 +245,12 @@ architectural conclusion:
 The measurements show a useful but bounded improvement, not a drop-in
 replacement:
 
-1. **Boundaries and spans:** 86/95 legacy token spans have exact Tree-sitter
-   named-node spans. The nine misses cluster in macro directive boundaries and
-   one `libname` statement; SQL contributes extra nested grammar boundaries
-   rather than losing the enclosing CREATE span.
+1. **Boundaries and spans:** 86/95 = 90.5% of legacy token spans have exact
+   Tree-sitter named-node spans, while 86/101 = 85.1% of Tree-sitter boundaries
+   have exact legacy counterparts, leaving 15 unmatched Tree-sitter boundaries.
+   The nine misses cluster in macro directive boundaries and one `libname`
+   statement; SQL contributes extra nested grammar boundaries rather than
+   losing the enclosing CREATE span.
 2. **Errors:** both frontends preserve evidence for malformed include files,
    but they expose different diagnostics. Legacy reports five unterminated
    comments and retains the valid prefix; Tree-sitter reports two error nodes
