@@ -383,6 +383,15 @@ def impact(
         if blocked_for_cycle and not expanded:
             mark_boundary(current_id, current_mode, "cycle")
 
+    start_reasons_by_mode = boundary_by_node.get(seed_id, {})
+    start_boundary_modes = {}
+    start_boundary_reasons = set()
+    for current_mode, reasons in start_reasons_by_mode.items():
+        ordered = _sort_reasons(reasons)
+        start_boundary_reasons.update(ordered)
+        start_boundary_modes[current_mode] = ordered
+    ordered_start_reasons = _sort_reasons(start_boundary_reasons)
+
     impacted = []
     paths = []
     for node_id in sorted(reached_ids, key=str):
@@ -451,6 +460,12 @@ def impact(
     )
     result = {
         "start": seed_id,
+        "start_boundary": bool(ordered_start_reasons),
+        "start_boundary_reason": (
+            ordered_start_reasons[0] if ordered_start_reasons else None
+        ),
+        "start_boundary_reasons": ordered_start_reasons,
+        "start_boundary_modes": start_boundary_modes,
         "modes": list(normalized_modes),
         "impacted": impacted,
         "paths": paths,

@@ -147,6 +147,80 @@ def test_impact_resolved_partial_is_possible_not_known():
     assert _by_id(result)["variable:partial"]["classification"] == "possibly_impacted"
 
 
+def test_impact_classifies_heuristic_edges_as_possible():
+    graph = {
+        "nodes": [
+            _node("variable:seed", "Variable"),
+            _node("variable:heuristic", "Variable"),
+        ],
+        "edges": [
+            _edge(
+                "edge:heuristic",
+                "derives",
+                "variable:seed",
+                "variable:heuristic",
+                "HEURISTIC",
+            )
+        ],
+    }
+
+    result = impact(graph, "variable:seed", mode="structural")
+
+    assert _by_id(result)["variable:heuristic"]["classification"] == (
+        "possibly_impacted"
+    )
+
+
+def test_impact_classifies_missing_or_malformed_evidence_kind_as_unresolved():
+    for evidence in ({}, {"kind": "NOT_A_KIND"}):
+        graph = {
+            "nodes": [
+                _node("variable:seed", "Variable"),
+                _node("variable:uncertain", "Variable"),
+            ],
+            "edges": [
+                {
+                    "id": "edge:uncertain",
+                    "type": "derives",
+                    "from": "variable:seed",
+                    "to": "variable:uncertain",
+                    "source": None,
+                    "evidence": evidence,
+                }
+            ],
+        }
+
+        result = impact(graph, "variable:seed", mode="structural")
+
+        assert _by_id(result)["variable:uncertain"]["classification"] == (
+            "unresolved_boundary"
+        )
+
+
+def test_impact_unknown_node_is_unresolved_after_observed_path():
+    graph = {
+        "nodes": [
+            _node("variable:seed", "Variable"),
+            _node("unknownvariable:missing@1", "UnknownVariable"),
+        ],
+        "edges": [
+            _edge(
+                "edge:observed",
+                "derives",
+                "variable:seed",
+                "unknownvariable:missing@1",
+                "OBSERVED",
+            )
+        ],
+    }
+
+    result = impact(graph, "variable:seed", mode="structural")
+
+    entry = _by_id(result)["unknownvariable:missing@1"]
+    assert entry["classification"] == "unresolved_boundary"
+    assert entry["boundary_reason"] == "unknown_node"
+
+
 def test_impact_returns_unknown_and_sink_boundaries():
     result = impact(_graph(), "variable:seed", mode="value_flow")
     entries = _by_id(result)
@@ -161,6 +235,54 @@ def test_impact_returns_unknown_and_sink_boundaries():
 
     structural = _by_id(impact(_graph(), "variable:seed", mode="structural"))
     assert structural["external:file"]["boundary_reason"] == "external_file"
+
+
+def test_impact_surfaces_seed_boundaries_without_counting_the_seed():
+    graph = {
+        "nodes": [
+            _node("unknownvariable:seed", "UnknownVariable"),
+            _node("external:seed", "ExternalFile"),
+            _node("variable:seed", "Variable"),
+            _node("variable:downstream", "Variable"),
+        ],
+        "edges": [
+            _edge(
+                "edge:unknown-downstream",
+                "derives",
+                "unknownvariable:seed",
+                "variable:downstream",
+            ),
+            _edge(
+                "edge:external-downstream",
+                "derives",
+                "external:seed",
+                "variable:downstream",
+            ),
+            _edge(
+                "edge:variable-downstream",
+                "derives",
+                "variable:seed",
+                "variable:downstream",
+            ),
+        ],
+    }
+
+    unknown = impact(graph, "unknownvariable:seed", mode="structural")
+    external = impact(graph, "external:seed", mode="structural")
+    ordinary = impact(graph, "variable:seed", mode="structural")
+
+    for result, reason in ((unknown, "unknown_node"), (external, "external_file")):
+        assert result["impacted"] == []
+        assert result["start_boundary"] is True
+        assert result["start_boundary_reason"] == reason
+        assert result["start_boundary_reasons"] == [reason]
+        assert result["start_boundary_modes"] == {"structural": [reason]}
+
+    assert len(ordinary["impacted"]) == 1
+    assert ordinary["start_boundary"] is False
+    assert ordinary["start_boundary_reason"] is None
+    assert ordinary["start_boundary_reasons"] == []
+    assert ordinary["start_boundary_modes"] == {}
 
 
 def test_impact_depth_counts_semantic_hops_and_reports_boundary():
