@@ -1,0 +1,922 @@
+{
+  "schema_version": "0.2.0",
+  "run_id": "20260920T120800Z-bb8b5dc8f6d040929c7a1964730f41c6",
+  "run_status": "PARTIAL",
+  "main_programs": [
+    "adae.sas"
+  ],
+  "setup_file": "setup.sas",
+  "nodes": [
+    {
+      "id": "setup:setup.sas",
+      "type": "SetupFile",
+      "label": "setup.sas",
+      "source": {
+        "file": "setup.sas",
+        "line_start": 1,
+        "line_end": 1,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "declared_setup_file"
+      }
+    },
+    {
+      "id": "library:sdtm",
+      "type": "Library",
+      "label": "sdtm",
+      "path_expression": "\"&root./sdtm\"",
+      "resolved_path": "/study/demo/sdtm",
+      "source": {
+        "file": "setup.sas",
+        "line_start": 4,
+        "line_end": 4,
+        "statement_order": 3,
+        "original_text": "libname sdtm \"&root./sdtm\";",
+        "rule": "libname_statement"
+      }
+    },
+    {
+      "id": "library:adam",
+      "type": "Library",
+      "label": "adam",
+      "path_expression": "\"&root./adam\"",
+      "resolved_path": "/study/demo/adam",
+      "source": {
+        "file": "setup.sas",
+        "line_start": 5,
+        "line_end": 5,
+        "statement_order": 4,
+        "original_text": "libname adam \"&root./adam\";",
+        "rule": "libname_statement"
+      }
+    },
+    {
+      "id": "macrovar:root@1",
+      "type": "MacroVariable",
+      "label": "root",
+      "value": "/study/demo",
+      "source": {
+        "file": "setup.sas",
+        "line_start": 1,
+        "line_end": 1,
+        "statement_order": 1,
+        "original_text": "%let root = /study/demo;",
+        "rule": "let_statement"
+      }
+    },
+    {
+      "id": "macrovar:domain@2",
+      "type": "MacroVariable",
+      "label": "domain",
+      "value": "ae",
+      "source": {
+        "file": "setup.sas",
+        "line_start": 2,
+        "line_end": 2,
+        "statement_order": 2,
+        "original_text": "%let domain = ae;",
+        "rule": "let_statement"
+      }
+    },
+    {
+      "id": "program:000_adae.sas",
+      "type": "Program",
+      "label": "adae.sas",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 1,
+        "line_end": 1,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "main_program"
+      }
+    },
+    {
+      "id": "dataset:work.adae_pre",
+      "type": "Dataset",
+      "label": "work.adae_pre",
+      "libref": "work",
+      "member": "adae_pre",
+      "source": null
+    },
+    {
+      "id": "step:001",
+      "type": "Step",
+      "label": "DATA step 001",
+      "step_kind": "DATA",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 1,
+        "line_end": 3,
+        "statement_order": 1,
+        "original_text": "data work.adae_pre;\n  set sdtm.ae adam.adsl;\nrun;",
+        "rule": "data_step_set"
+      },
+      "patterns": []
+    },
+    {
+      "id": "dataset:sdtm.ae",
+      "type": "Dataset",
+      "label": "sdtm.ae",
+      "libref": "sdtm",
+      "member": "ae",
+      "source": null
+    },
+    {
+      "id": "dataset:adam.adsl",
+      "type": "Dataset",
+      "label": "adam.adsl",
+      "libref": "adam",
+      "member": "adsl",
+      "source": null
+    },
+    {
+      "id": "dataset:work.adae_srt",
+      "type": "Dataset",
+      "label": "work.adae_srt",
+      "libref": "work",
+      "member": "adae_srt",
+      "source": null
+    },
+    {
+      "id": "step:002",
+      "type": "Step",
+      "label": "PROC SORT 002",
+      "step_kind": "PROC_SORT",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 5,
+        "line_end": 7,
+        "statement_order": 4,
+        "original_text": "proc sort data=work.adae_pre out=work.adae_srt;\n  by usubjid aeseq;\nrun;",
+        "rule": "proc_sort_out"
+      },
+      "patterns": [],
+      "by_vars": [
+        {
+          "name": "usubjid",
+          "direction": "ascending",
+          "position": 1
+        },
+        {
+          "name": "aeseq",
+          "direction": "ascending",
+          "position": 2
+        }
+      ]
+    },
+    {
+      "id": "macrocall:001",
+      "type": "MacroCall",
+      "label": "%gm_derive",
+      "macro_name": "gm_derive",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_call"
+      }
+    },
+    {
+      "id": "macroparam:001:inds",
+      "type": "MacroParameter",
+      "label": "inds",
+      "raw_value": "work.adae_srt",
+      "resolved_value": "work.adae_srt",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_parameter"
+      }
+    },
+    {
+      "id": "macroparam:001:outds",
+      "type": "MacroParameter",
+      "label": "outds",
+      "raw_value": "adam.adae",
+      "resolved_value": "adam.adae",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_parameter"
+      }
+    },
+    {
+      "id": "macrodefinition:gm_derive",
+      "type": "MacroDefinition",
+      "label": "gm_derive",
+      "parameters": [
+        "inds",
+        "outds"
+      ],
+      "source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_definition"
+      },
+      "template_status": "SUPPORTED",
+      "template_kinds": [
+        "DATA"
+      ]
+    },
+    {
+      "id": "macrosource:C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+      "type": "MacroSourceFile",
+      "label": "gm_derive.sas",
+      "path": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+      "source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_definition"
+      }
+    },
+    {
+      "id": "dataset:adam.adae",
+      "type": "Dataset",
+      "label": "adam.adae",
+      "libref": "adam",
+      "member": "adae",
+      "source": null,
+      "template_derived": true,
+      "call_source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_template_call"
+      },
+      "definition_source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_source_template"
+      }
+    },
+    {
+      "id": "step:003",
+      "type": "Step",
+      "label": "DATA step 003",
+      "step_kind": "DATA",
+      "source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 8,
+        "line_end": 10,
+        "statement_order": 1,
+        "original_text": "  data &outds.;\n    set &inds.;\n  run;",
+        "rule": "data_step_set"
+      },
+      "patterns": [],
+      "template_derived": true,
+      "call_source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_template_call"
+      },
+      "definition_source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_source_template"
+      }
+    },
+    {
+      "id": "macrocall:002",
+      "type": "MacroCall",
+      "label": "%gm_missing",
+      "macro_name": "gm_missing",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "macro_call"
+      }
+    },
+    {
+      "id": "macroparam:002:inds",
+      "type": "MacroParameter",
+      "label": "inds",
+      "raw_value": "adam.adae",
+      "resolved_value": "adam.adae",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "macro_parameter"
+      }
+    },
+    {
+      "id": "macroparam:002:outds",
+      "type": "MacroParameter",
+      "label": "outds",
+      "raw_value": "&unknown_out.",
+      "resolved_value": null,
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "macro_parameter"
+      }
+    },
+    {
+      "id": "unknowndataset:&unknown_out.",
+      "type": "UnknownDataset",
+      "label": "&unknown_out.",
+      "unresolved_expression": "&unknown_out.",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "unresolved_macro_variable_in_parameter"
+      }
+    },
+    {
+      "id": "unknownmacro:gm_missing",
+      "type": "UnknownMacro",
+      "label": "gm_missing",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "macro_source_not_found"
+      }
+    },
+    {
+      "id": "commentblock:001",
+      "type": "CommentBlock",
+      "label": "/* inactive evidence: an earlier draft read from sdtm.suppae\ndata work.adae_supp;\n  set sdtm.suppae;\nrun;\n*/",
+      "kind": "block",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 9,
+        "line_end": 13,
+        "statement_order": 6,
+        "original_text": "/* inactive evidence: an earlier draft read from sdtm.suppae\ndata work.adae_supp;\n  set sdtm.suppae;\nrun;\n*/",
+        "rule": "comment_block"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge:001",
+      "type": "defines_macro_variable",
+      "from": "setup:setup.sas",
+      "to": "macrovar:root@1",
+      "source": null
+    },
+    {
+      "id": "edge:002",
+      "type": "defines_macro_variable",
+      "from": "setup:setup.sas",
+      "to": "macrovar:domain@2",
+      "source": null
+    },
+    {
+      "id": "edge:003",
+      "type": "reads_dataset",
+      "from": "dataset:sdtm.ae",
+      "to": "step:001",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 2,
+        "line_end": 2,
+        "statement_order": 2,
+        "original_text": "  set sdtm.ae adam.adsl;",
+        "rule": "data_step_set"
+      }
+    },
+    {
+      "id": "edge:004",
+      "type": "reads_dataset",
+      "from": "dataset:adam.adsl",
+      "to": "step:001",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 2,
+        "line_end": 2,
+        "statement_order": 2,
+        "original_text": "  set sdtm.ae adam.adsl;",
+        "rule": "data_step_set"
+      }
+    },
+    {
+      "id": "edge:005",
+      "type": "writes_dataset",
+      "from": "step:001",
+      "to": "dataset:work.adae_pre",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 1,
+        "line_end": 3,
+        "statement_order": 1,
+        "original_text": "data work.adae_pre;\n  set sdtm.ae adam.adsl;\nrun;",
+        "rule": "data_step_output"
+      }
+    },
+    {
+      "id": "edge:006",
+      "type": "depends_on",
+      "from": "dataset:work.adae_pre",
+      "to": "dataset:sdtm.ae",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 2,
+        "line_end": 2,
+        "statement_order": 2,
+        "original_text": "  set sdtm.ae adam.adsl;",
+        "rule": "data_step_set"
+      }
+    },
+    {
+      "id": "edge:007",
+      "type": "depends_on",
+      "from": "dataset:work.adae_pre",
+      "to": "dataset:adam.adsl",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 2,
+        "line_end": 2,
+        "statement_order": 2,
+        "original_text": "  set sdtm.ae adam.adsl;",
+        "rule": "data_step_set"
+      }
+    },
+    {
+      "id": "edge:008",
+      "type": "reads_dataset",
+      "from": "dataset:work.adae_pre",
+      "to": "step:002",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 5,
+        "line_end": 7,
+        "statement_order": 4,
+        "original_text": "proc sort data=work.adae_pre out=work.adae_srt;\n  by usubjid aeseq;\nrun;",
+        "rule": "proc_sort_data"
+      }
+    },
+    {
+      "id": "edge:009",
+      "type": "writes_dataset",
+      "from": "step:002",
+      "to": "dataset:work.adae_srt",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 5,
+        "line_end": 7,
+        "statement_order": 4,
+        "original_text": "proc sort data=work.adae_pre out=work.adae_srt;\n  by usubjid aeseq;\nrun;",
+        "rule": "proc_sort_out"
+      }
+    },
+    {
+      "id": "edge:010",
+      "type": "depends_on",
+      "from": "dataset:work.adae_srt",
+      "to": "dataset:work.adae_pre",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 5,
+        "line_end": 7,
+        "statement_order": 4,
+        "original_text": "proc sort data=work.adae_pre out=work.adae_srt;\n  by usubjid aeseq;\nrun;",
+        "rule": "proc_sort_out"
+      }
+    },
+    {
+      "id": "edge:011",
+      "type": "calls_macro",
+      "from": "program:000_adae.sas",
+      "to": "macrocall:001",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_call"
+      }
+    },
+    {
+      "id": "edge:012",
+      "type": "passes_parameter",
+      "from": "macrocall:001",
+      "to": "macroparam:001:inds",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_parameter"
+      }
+    },
+    {
+      "id": "edge:013",
+      "type": "passes_parameter",
+      "from": "macrocall:001",
+      "to": "macroparam:001:outds",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_parameter"
+      }
+    },
+    {
+      "id": "edge:014",
+      "type": "implemented_by",
+      "from": "macrocall:001",
+      "to": "macrodefinition:gm_derive",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_definition"
+      }
+    },
+    {
+      "id": "edge:015",
+      "type": "defined_in",
+      "from": "macrodefinition:gm_derive",
+      "to": "macrosource:C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+      "source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_definition"
+      }
+    },
+    {
+      "id": "edge:016",
+      "type": "reads_dataset",
+      "from": "dataset:work.adae_srt",
+      "to": "step:003",
+      "source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 9,
+        "line_end": 9,
+        "statement_order": 2,
+        "original_text": "    set &inds.;",
+        "rule": "data_step_set"
+      },
+      "template_derived": true,
+      "call_source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_template_call"
+      },
+      "definition_source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_source_template"
+      }
+    },
+    {
+      "id": "edge:017",
+      "type": "writes_dataset",
+      "from": "step:003",
+      "to": "dataset:adam.adae",
+      "source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 8,
+        "line_end": 10,
+        "statement_order": 1,
+        "original_text": "  data &outds.;\n    set &inds.;\n  run;",
+        "rule": "data_step_output"
+      },
+      "template_derived": true,
+      "call_source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_template_call"
+      },
+      "definition_source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_source_template"
+      }
+    },
+    {
+      "id": "edge:018",
+      "type": "depends_on",
+      "from": "dataset:adam.adae",
+      "to": "dataset:work.adae_srt",
+      "source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 9,
+        "line_end": 9,
+        "statement_order": 2,
+        "original_text": "    set &inds.;",
+        "rule": "data_step_set"
+      },
+      "template_derived": true,
+      "call_source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_template_call"
+      },
+      "definition_source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_source_template"
+      }
+    },
+    {
+      "id": "edge:019",
+      "type": "reads_dataset",
+      "from": "dataset:work.adae_srt",
+      "to": "macrocall:001",
+      "template_derived": true,
+      "definition_source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_source_template"
+      },
+      "call_source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_template_call"
+      },
+      "source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_template_call"
+      }
+    },
+    {
+      "id": "edge:020",
+      "type": "writes_dataset",
+      "from": "macrocall:001",
+      "to": "dataset:adam.adae",
+      "template_derived": true,
+      "definition_source": {
+        "file": "C:/Users/kllkt/orca/workspaces/sas-graph/amberjack/tests/fixtures/basic_adae/macros/gm_derive.sas",
+        "line_start": 6,
+        "line_end": 12,
+        "statement_order": null,
+        "original_text": null,
+        "rule": "macro_source_template"
+      },
+      "call_source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_template_call"
+      },
+      "source": {
+        "file": "adae.sas",
+        "line_start": 15,
+        "line_end": 15,
+        "statement_order": 7,
+        "original_text": "%gm_derive(inds=work.adae_srt, outds=adam.adae);",
+        "rule": "macro_source_template_call"
+      }
+    },
+    {
+      "id": "edge:021",
+      "type": "calls_macro",
+      "from": "program:000_adae.sas",
+      "to": "macrocall:002",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "macro_call"
+      }
+    },
+    {
+      "id": "edge:022",
+      "type": "passes_parameter",
+      "from": "macrocall:002",
+      "to": "macroparam:002:inds",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "macro_parameter"
+      }
+    },
+    {
+      "id": "edge:023",
+      "type": "passes_parameter",
+      "from": "macrocall:002",
+      "to": "macroparam:002:outds",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "macro_parameter"
+      }
+    },
+    {
+      "id": "edge:024",
+      "type": "resolves_to",
+      "from": "macroparam:002:outds",
+      "to": "unknowndataset:&unknown_out.",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "unresolved_macro_variable_in_parameter"
+      }
+    },
+    {
+      "id": "edge:025",
+      "type": "implemented_by",
+      "from": "macrocall:002",
+      "to": "unknownmacro:gm_missing",
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "macro_source_not_found"
+      }
+    },
+    {
+      "id": "edge:026",
+      "type": "contains_step",
+      "from": "program:000_adae.sas",
+      "to": "step:001",
+      "source": null
+    },
+    {
+      "id": "edge:027",
+      "type": "contains_step",
+      "from": "program:000_adae.sas",
+      "to": "step:002",
+      "source": null
+    },
+    {
+      "id": "edge:028",
+      "type": "contains_step",
+      "from": "program:000_adae.sas",
+      "to": "step:003",
+      "source": null
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding:001:unresolved_macro_variable",
+      "status": "UNRESOLVED_MACRO_VARIABLE",
+      "type": "unresolved_macro_variable",
+      "severity": "WARNING",
+      "object": "&unknown_out.",
+      "message": "Macro variable &unknown_out. has no value at this statement. The parameter value could not be resolved.",
+      "suggested_action": "Define the macro variable earlier, or confirm it is created at runtime and therefore out of static scope.",
+      "affected_nodes": [
+        "macroparam:002:outds",
+        "unknowndataset:&unknown_out."
+      ],
+      "affected_edges": [],
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "unresolved_macro_variable_in_parameter"
+      }
+    },
+    {
+      "id": "finding:002:macro_source_not_found",
+      "status": "UNRESOLVED_MACRO_SOURCE",
+      "type": "macro_source_not_found",
+      "severity": "WARNING",
+      "object": "gm_missing",
+      "message": "Macro source for %gm_missing was not found in the declared macro_roots, and no macro contract exists. Internal reads and writes were not inferred.",
+      "suggested_action": "Add the macro source directory to macro_roots, or supply a macro contract for gm_missing.",
+      "affected_nodes": [
+        "macrocall:002",
+        "unknownmacro:gm_missing"
+      ],
+      "affected_edges": [],
+      "source": {
+        "file": "adae.sas",
+        "line_start": 17,
+        "line_end": 17,
+        "statement_order": 8,
+        "original_text": "%gm_missing(inds=adam.adae, outds=&unknown_out.);",
+        "rule": "macro_source_not_found"
+      }
+    },
+    {
+      "id": "finding:003:dataset_read_never_written",
+      "status": "SUPPORTED",
+      "type": "dataset_read_never_written",
+      "severity": "INFORMATION",
+      "object": "sdtm.ae",
+      "message": "`sdtm.ae` is read but never written by any parsed program; lineage stops here because it is an external input to this parsed scope.",
+      "suggested_action": null,
+      "affected_nodes": [
+        "dataset:sdtm.ae"
+      ],
+      "affected_edges": [],
+      "source": {
+        "file": "adae.sas",
+        "line_start": 2,
+        "line_end": 2,
+        "statement_order": 2,
+        "original_text": "  set sdtm.ae adam.adsl;",
+        "rule": "dataset_read_never_written"
+      }
+    },
+    {
+      "id": "finding:004:dataset_read_never_written",
+      "status": "SUPPORTED",
+      "type": "dataset_read_never_written",
+      "severity": "INFORMATION",
+      "object": "adam.adsl",
+      "message": "`adam.adsl` is read but never written by any parsed program; lineage stops here because it is an external input to this parsed scope.",
+      "suggested_action": null,
+      "affected_nodes": [
+        "dataset:adam.adsl"
+      ],
+      "affected_edges": [],
+      "source": {
+        "file": "adae.sas",
+        "line_start": 2,
+        "line_end": 2,
+        "statement_order": 2,
+        "original_text": "  set sdtm.ae adam.adsl;",
+        "rule": "dataset_read_never_written"
+      }
+    }
+  ]
+}

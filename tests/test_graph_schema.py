@@ -11,6 +11,7 @@ from sas_graph.graph_validator import validate_graph
 
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "reference_graph_0_3_0.json"
+FIXTURE_0_2_0 = Path(__file__).resolve().parent / "fixtures" / "reference_graph_0_2_0.json"
 
 
 EXPECTED_NODE_TYPES = {
@@ -178,12 +179,10 @@ def test_graph_io_accepts_both_supported_schema_versions():
 
 
 def test_normalizer_upconverts_a_real_graph_without_dropping_envelope_data():
-    source_path = next(
-        (Path(__file__).resolve().parent / "fixtures").glob(
-            "*/graph_runs/runs/*/graph.json"
-        )
-    )
-    source = json.loads(source_path.read_text(encoding="utf-8"))
+    # A frozen 0.2.0 run, not a freshly generated one: the live pipeline's
+    # capability list grows over time, so globbing run output made this test
+    # assert against whatever the current code emits.
+    source = json.loads(FIXTURE_0_2_0.read_text(encoding="utf-8"))
     normalized = normalize_graph(source)
 
     assert source["schema_version"] == "0.2.0"
