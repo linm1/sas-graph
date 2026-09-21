@@ -1,6 +1,13 @@
 import conftest  # noqa: F401
+import pytest
 
-from sas_graph.graph_queries import analyze_impact, search_nodes, trace_lineage
+from sas_graph.graph_index import GraphIndex
+from sas_graph.graph_queries import (
+    analyze_impact,
+    explain_edge,
+    search_nodes,
+    trace_lineage,
+)
 
 
 def _node(node_id, node_type, label=None, source=None):
@@ -195,3 +202,67 @@ def test_trace_lineage_handles_branch_merge_and_cycle_without_duplicates():
     }
     assert len(reached_ids) == len(set(reached_ids))
     assert {edge["id"] for edge in result["edges"]} == {edge["id"] for edge in edges}
+
+
+def test_explain_edge_returns_evidence_path_and_deduplicated_linked_findings():
+    graph = _graph()
+    graph["edges"][0]["evidence"] = {
+        "kind": "RESOLVED",
+        "extractor": "data_step_set",
+        "derivation_refs": ["step:001", "dataset:raw.a"],
+    }
+    graph["findings"] = [
+        {
+            "id": "finding:002",
+            "affected_edges": ["edge:001"],
+            "affected_nodes": [],
+        },
+        {
+            "id": "finding:001",
+            "affected_edges": [],
+            "affected_nodes": ["dataset:raw.a", "step:001"],
+        },
+    ]
+
+    expected = explain_edge(graph, "edge:001")
+    indexed = explain_edge(graph, "edge:001", index=GraphIndex(graph))
+
+    assert expected == indexed
+    assert expected["edge"] == graph["edges"][0]
+    assert expected["evidence"] == graph["edges"][0]["evidence"]
+    assert expected["source"] == graph["edges"][0]["source"]
+    assert [record["id"] for record in expected["resolution_path"]] == [
+        "dataset:raw.a",
+        "step:001",
+    ]
+    assert [finding["id"] for finding in expected["findings"]] == [
+        "finding:001",
+        "finding:002",
+    ]
+
+
+def test_explain_edge_rejects_unknown_edge_id():
+    with pytest.raises(ValueError, match="edge not found"):
+        explain_edge(_graph(), "edge:missing")
+
+
+def test_explain_edge_bounds_each_record_list_and_reports_continuation():
+    graph = _graph()
+    graph["edges"][0]["evidence"] = {
+        "kind": "RESOLVED",
+        "derivation_refs": ["step:001", "dataset:raw.a"],
+    }
+    graph["findings"] = [
+        {"id": "finding:002", "affected_edges": ["edge:001"]},
+        {"id": "finding:001", "affected_edges": ["edge:001"]},
+    ]
+
+    result = explain_edge(graph, "edge:001", limit=1)
+
+    assert len(result["resolution_path"]) == 1
+    assert len(result["findings"]) == 1
+    assert result["visited_count"] == 4
+    assert result["truncated"] is True
+    assert result["limit_hit"] is True
+    assert result["depth_hit"] is False
+    assert result["continuation"] == ["finding:002", "step:001"]

@@ -350,6 +350,9 @@ def test_resolved_macro_variable_in_data_target_produces_a_real_dataset():
     writes = {e["to"] for e in ctx.edges if e["type"] == "writes_dataset"}
     assert writes == {"dataset:work.ae_out"}
     assert not any(n["type"] == "UnknownDataset" for n in ctx.nodes)
+    write = next(e for e in ctx.edges if e["type"] == "writes_dataset")
+    assert write["evidence"]["kind"] == "RESOLVED"
+    assert write["evidence"]["resolution"] == "EXACT"
 
 
 def test_assignment_writes_target_and_reads_rhs_named_variable():
@@ -753,8 +756,8 @@ def test_if_then_assignment_emits_derivation_and_conditioned_by_edges():
     assert derives[0]["from"] == "step:001"
     assert derives[0]["to"] == "variable:work.a.target"
     assert derives[0]["expression"] == "a + b"
-    assert derives[0]["evidence"]["kind"] == "UNKNOWN"
-    assert derives[0]["evidence"]["resolution"] == "NOT_ATTEMPTED"
+    assert derives[0]["evidence"]["kind"] == "OBSERVED"
+    assert derives[0]["evidence"]["resolution"] == "EXACT"
     assert derives[0]["evidence"]["confidence"] is None
     assert {
         (edge["from"], edge["to"], edge["condition_text"])
@@ -2033,6 +2036,9 @@ def test_unresolved_macro_in_assignment_rhs_stays_unknown():
         (finding["type"], finding["status"], finding["severity"])
         for finding in ctx.findings
     } == {("unqualified_variable_reference", "UNQUALIFIED_VARIABLE", "WARNING")}
+    read = next(e for e in ctx.edges if e["type"] == "reads_variable")
+    assert read["evidence"]["kind"] == "UNKNOWN"
+    assert read["evidence"]["resolution"] == "UNRESOLVED"
 
 
 def test_macro_resolution_respects_single_and_double_quoted_assignment_literals():
@@ -2062,6 +2068,13 @@ def test_macro_resolution_respects_single_and_double_quoted_assignment_literals(
         ("step:001", "variable:work.out.bare_dose", "999", None),
     }
     assert not ctx.findings
+    writes_by_variable = {
+        edge["to"].rsplit(".", 1)[-1]: edge
+        for edge in ctx.edges if edge["type"] == "writes_variable"
+    }
+    assert writes_by_variable["single_note"]["evidence"]["kind"] == "OBSERVED"
+    assert writes_by_variable["double_note"]["evidence"]["kind"] == "RESOLVED"
+    assert writes_by_variable["bare_dose"]["evidence"]["kind"] == "RESOLVED"
 
 
 def demo():

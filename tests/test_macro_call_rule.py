@@ -280,6 +280,11 @@ def test_source_template_binds_data_dependencies_at_the_call_site(tmp_path):
     assert template_edges
     assert all(edge["call_source"]["file"] == "adae.sas" for edge in template_edges)
     assert all(edge["definition_source"]["file"].endswith("test.sas") for edge in template_edges)
+    assert all(edge["evidence"]["kind"] == "RESOLVED" for edge in template_edges)
+    assert all(
+        edge["evidence"]["derivation_refs"] == [call_id, f"macrodefinition:test"]
+        for edge in template_edges
+    )
 
 
 def test_source_template_binds_variable_edges_at_the_call_site(tmp_path):

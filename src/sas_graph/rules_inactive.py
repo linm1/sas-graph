@@ -2,11 +2,22 @@
 
 import re
 
+from .evidence import EvidenceKind, ResolutionStatus
 
 _DATA_RE = re.compile(r"^data\s+([\w.&]+(?:\s+[\w.&]+)*)\s*;$", re.IGNORECASE)
 _INPUT_RE = re.compile(r"^(?:set|merge)\s+([\w.&]+(?:\s+[\w.&]+)*)\s*;$", re.IGNORECASE)
 _RUN_RE = re.compile(r"^run\s*;$", re.IGNORECASE)
 _MACRO_RE = re.compile(r"&([A-Za-z_][A-Za-z0-9_]*)\.?")
+
+
+def _edge_evidence(ctx, source):
+    extractor = source.get("rule", "rules_inactive")
+    return ctx.make_evidence(
+        EvidenceKind.OBSERVED,
+        ResolutionStatus.EXACT,
+        extractor,
+        source,
+    )
 
 
 def _source(comment, rule, original_text=None, line_start=None, line_end=None):
@@ -102,6 +113,9 @@ def apply(comments, ctx):
                 ctx.add_edge(
                     "comment_mentions_macro", block_id, evidence_id,
                     {**statement_source, "rule": "comment_mentions_macro"},
+                    evidence=_edge_evidence(
+                        ctx, {**statement_source, "rule": "comment_mentions_macro"}
+                    ),
                     macro_name=name.lower(),
                 )
             data_match = _DATA_RE.match(text)
@@ -110,17 +124,31 @@ def apply(comments, ctx):
                 target_ids = [dataset(raw) for raw in data_match.group(1).split()]
                 for raw, evidence_id in zip(data_match.group(1).split(), target_ids):
                     ctx.add_edge("comment_mentions_dataset", block_id, evidence_id,
-                                 {**statement_source, "rule": "comment_mentions_dataset"}, dataset_name=raw)
+                                 {**statement_source, "rule": "comment_mentions_dataset"},
+                                 evidence=_edge_evidence(
+                                     ctx, {**statement_source, "rule": "comment_mentions_dataset"}
+                                 ),
+                                 dataset_name=raw)
                     ctx.add_edge("inactive_candidate_writes", statement_id, evidence_id,
-                                 {**statement_source, "rule": "inactive_candidate_writes"})
+                                 {**statement_source, "rule": "inactive_candidate_writes"},
+                                 evidence=_edge_evidence(
+                                     ctx, {**statement_source, "rule": "inactive_candidate_writes"}
+                                 ))
             elif input_match:
                 input_ids = [dataset(raw) for raw in input_match.group(1).split()]
                 input_entries.extend((evidence_id, statement_source) for evidence_id in input_ids)
                 for raw, evidence_id in zip(input_match.group(1).split(), input_ids):
                     ctx.add_edge("comment_mentions_dataset", block_id, evidence_id,
-                                 {**statement_source, "rule": "comment_mentions_dataset"}, dataset_name=raw)
+                                 {**statement_source, "rule": "comment_mentions_dataset"},
+                                 evidence=_edge_evidence(
+                                     ctx, {**statement_source, "rule": "comment_mentions_dataset"}
+                                 ),
+                                 dataset_name=raw)
                     ctx.add_edge("inactive_candidate_reads", statement_id, evidence_id,
-                                 {**statement_source, "rule": "inactive_candidate_reads"})
+                                 {**statement_source, "rule": "inactive_candidate_reads"},
+                                 evidence=_edge_evidence(
+                                     ctx, {**statement_source, "rule": "inactive_candidate_reads"}
+                                 ))
 
         dependency_pairs = set()
         for target_id in target_ids:
@@ -129,4 +157,7 @@ def apply(comments, ctx):
                     continue
                 dependency_pairs.add((target_id, input_id))
                 ctx.add_edge("inactive_candidate_depends_on", target_id, input_id,
-                             {**input_source, "rule": "inactive_candidate_depends_on"})
+                             {**input_source, "rule": "inactive_candidate_depends_on"},
+                             evidence=_edge_evidence(
+                                 ctx, {**input_source, "rule": "inactive_candidate_depends_on"}
+                             ))

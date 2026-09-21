@@ -22,6 +22,7 @@ import re
 from dataclasses import replace
 
 from .blocks import group_blocks
+from .evidence import EvidenceKind, ResolutionStatus
 from .macro_state import resolve_text
 from .rules_data_step import apply as apply_data_step
 from .rules_proc_import import apply as apply_proc_import
@@ -58,6 +59,32 @@ _MACRO_OPERAND_RE = re.compile(
 )
 _COMPOUND_OPERAND_RE = re.compile(r"\b(?:and|or|eq|ne)\b|[()=~!]", re.IGNORECASE)
 _MAX_STATIC_LOOP_ITERATIONS = 20
+
+
+def _edge_evidence(ctx, source, kind, resolution, derivation_refs=()):
+    extractor = source.get("rule", "rules_macro_call") if isinstance(source, dict) else "rules_macro_call"
+    return ctx.make_evidence(
+        kind,
+        resolution,
+        extractor,
+        source,
+        derivation_refs=derivation_refs,
+    )
+
+
+def _template_evidence(ctx, source, from_id, to_id, call_id, definition_id):
+    """Attach the call and definition records to a copied template edge."""
+    if any(
+        str(node_id).lower().startswith(("unknowndataset:", "unknownvariable:", "unknownmacro:"))
+        for node_id in (from_id, to_id)
+    ):
+        return _edge_evidence(
+            ctx, source, EvidenceKind.UNKNOWN, ResolutionStatus.UNRESOLVED,
+        )
+    return _edge_evidence(
+        ctx, source, EvidenceKind.RESOLVED, ResolutionStatus.EXACT,
+        derivation_refs=(call_id, definition_id),
+    )
 
 
 def is_macro_call(statement_text):
@@ -129,7 +156,13 @@ def apply(
         call_id, "MacroCall", f"%{macro_name}", macro_name=macro_name,
         source=statement.as_source("macro_call"),
     )
-    ctx.add_edge("calls_macro", program_node_id, call_id, statement.as_source("macro_call"))
+    call_source = statement.as_source("macro_call")
+    ctx.add_edge(
+        "calls_macro", program_node_id, call_id, call_source,
+        evidence=_edge_evidence(
+            ctx, call_source, EvidenceKind.OBSERVED, ResolutionStatus.EXACT,
+        ),
+    )
 
     # Section 15.7's forward-resolution gate: real SAS compiles a %macro when
     # its %macro statement is reached, so a call written textually before its
@@ -159,8 +192,12 @@ def apply(
             resolved_value=None if unresolved else resolved_value,
             source=statement.as_source("macro_parameter"),
         )
+        parameter_source = statement.as_source("macro_parameter")
         ctx.add_edge(
-            "passes_parameter", call_id, param_id, statement.as_source("macro_parameter")
+            "passes_parameter", call_id, param_id, parameter_source,
+            evidence=_edge_evidence(
+                ctx, parameter_source, EvidenceKind.OBSERVED, ResolutionStatus.EXACT,
+            ),
         )
         param_ids[param_name] = (param_id, resolved_value, unresolved)
 
@@ -168,9 +205,13 @@ def apply(
             unknown_id = ctx.add_unknown_dataset(raw_value, statement.as_source(
                 "unresolved_macro_variable_in_parameter"
             ))
+            unresolved_source = statement.as_source("unresolved_macro_variable_in_parameter")
             ctx.add_edge(
-                "resolves_to", param_id, unknown_id,
-                statement.as_source("unresolved_macro_variable_in_parameter"),
+                "resolves_to", param_id, unknown_id, unresolved_source,
+                evidence=_edge_evidence(
+                    ctx, unresolved_source,
+                    EvidenceKind.UNKNOWN, ResolutionStatus.UNRESOLVED,
+                ),
             )
             ctx.add_finding(
                 "unresolved_macro_variable",
@@ -220,16 +261,27 @@ def apply(
             parameters=[parameter.name for parameter in definition.parameters],
             source=definition_source,
         )
+        definition_edge_source = statement.as_source("macro_source_definition")
         ctx.add_edge(
             "implemented_by", call_id, definition_id,
-            statement.as_source("macro_source_definition"),
+            definition_edge_source,
+            evidence=_edge_evidence(
+                ctx, definition_edge_source,
+                EvidenceKind.OBSERVED, ResolutionStatus.EXACT,
+            ),
         )
         if program_path is not None and definition.path == program_path:
             # Inline definition in the file already modeled by program_node_id
             # (e.g. qc_adae.sas defining and calling its own macro) -- a
             # MacroSourceFile node here would just duplicate that Program/
             # SetupFile node, so `defined_in` points at it directly instead.
-            ctx.add_edge("defined_in", definition_id, program_node_id, definition_source)
+            ctx.add_edge(
+                "defined_in", definition_id, program_node_id, definition_source,
+                evidence=_edge_evidence(
+                    ctx, definition_source,
+                    EvidenceKind.OBSERVED, ResolutionStatus.EXACT,
+                ),
+            )
         else:
             source_file_id = f"macrosource:{definition.path.as_posix()}"
             ctx.add_node(
@@ -239,7 +291,13 @@ def apply(
                 path=str(definition.path.as_posix()),
                 source=definition_source,
             )
-            ctx.add_edge("defined_in", definition_id, source_file_id, definition_source)
+            ctx.add_edge(
+                "defined_in", definition_id, source_file_id, definition_source,
+                evidence=_edge_evidence(
+                    ctx, definition_source,
+                    EvidenceKind.OBSERVED, ResolutionStatus.EXACT,
+                ),
+            )
         _bind_source_template(
             statement, ctx, call_id, definition_id, definition, param_ids, let_events
         )
@@ -253,8 +311,12 @@ def apply(
     ctx.add_node(
         unknown_id, "UnknownMacro", macro_name, source=statement.as_source("macro_source_not_found")
     )
+    unknown_source = statement.as_source("macro_source_not_found")
     ctx.add_edge(
-        "implemented_by", call_id, unknown_id, statement.as_source("macro_source_not_found")
+        "implemented_by", call_id, unknown_id, unknown_source,
+        evidence=_edge_evidence(
+            ctx, unknown_source, EvidenceKind.UNKNOWN, ResolutionStatus.UNRESOLVED,
+        ),
     )
     ctx.add_finding(
         "macro_source_not_found",
@@ -292,7 +354,16 @@ def _bind_contract(statement, ctx, call_id, contract, param_ids, let_events):
         purpose=contract.purpose, examples=contract.examples,
         source=contract_source,
     )
-    ctx.add_edge("implemented_by", call_id, contract_id, contract_source)
+    ctx.add_edge(
+        "implemented_by", call_id, contract_id, contract_source,
+        evidence=_edge_evidence(
+            ctx,
+            contract_source,
+            EvidenceKind.CONTRACT_DERIVED,
+            ResolutionStatus.EXACT,
+            derivation_refs=(call_id, contract_id),
+        ),
+    )
 
     missing_required = [
         name for name, meta in contract.parameters.items()
@@ -481,12 +552,19 @@ def _bind_source_template(
         item["definition_source"] = definition_source
 
     for edge in ctx.edges[edges_before:]:
+        edge["evidence"] = _template_evidence(
+            ctx, edge.get("source"), edge.get("from"), edge.get("to"),
+            call_id, definition_id,
+        )
         if edge["type"] == "reads_dataset":
             ctx.add_edge(
                 edge["type"],
                 edge["from"],
                 call_id,
                 call_source,
+                evidence=_template_evidence(
+                    ctx, call_source, edge["from"], call_id, call_id, definition_id,
+                ),
                 template_derived=True,
                 definition_source=definition_source,
                 call_source=call_source,
@@ -497,6 +575,9 @@ def _bind_source_template(
                 call_id,
                 edge["to"],
                 call_source,
+                evidence=_template_evidence(
+                    ctx, call_source, call_id, edge["to"], call_id, definition_id,
+                ),
                 template_derived=True,
                 definition_source=definition_source,
                 call_source=call_source,
@@ -507,6 +588,9 @@ def _bind_source_template(
                 call_id,
                 edge["to"],
                 call_source,
+                evidence=_template_evidence(
+                    ctx, call_source, call_id, edge["to"], call_id, definition_id,
+                ),
                 value=edge.get("value"),
                 operator=edge.get("operator"),
                 template_derived=True,
@@ -519,6 +603,9 @@ def _bind_source_template(
                 edge["from"],
                 call_id,
                 call_source,
+                evidence=_template_evidence(
+                    ctx, call_source, edge["from"], call_id, call_id, definition_id,
+                ),
                 value=edge.get("value"),
                 operator=edge.get("operator"),
                 template_derived=True,
@@ -693,7 +780,12 @@ def _add_control_evidence(ctx, call_id, definition_id, definition, call_statemen
         call_source=call_statement.as_source("macro_source_template_call"),
         definition_source=definition.source("macro_source_template"),
     )
-    ctx.add_edge("has_control_flow", definition_id, control_id, control_source)
+    ctx.add_edge(
+        "has_control_flow", definition_id, control_id, control_source,
+        evidence=_edge_evidence(
+            ctx, control_source, EvidenceKind.OBSERVED, ResolutionStatus.EXACT,
+        ),
+    )
     for index, branch in enumerate(control["branches"], 1):
         if not branch:
             continue
@@ -703,7 +795,12 @@ def _add_control_evidence(ctx, call_id, definition_id, definition, call_statemen
             candidate_text="\n".join(item.original_text for item in branch),
             source=branch[0].as_source("conditional_branch_candidate"),
         )
-        ctx.add_edge("conditional_candidate", control_id, branch_id, control_source)
+        ctx.add_edge(
+            "conditional_candidate", control_id, branch_id, control_source,
+            evidence=_edge_evidence(
+                ctx, control_source, EvidenceKind.OBSERVED, ResolutionStatus.EXACT,
+            ),
+        )
 
 
 def _add_control_not_executed(ctx, statement, call_id, definition_id, definition, control, status):

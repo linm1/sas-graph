@@ -16,8 +16,28 @@ def _write_graph(tmp_path):
             {"id": "variable:work.b.flag", "type": "Variable", "label": "work.b.flag", "source": None},
         ],
         "edges": [
-            {"id": "edge:001", "type": "reads_variable", "from": "variable:work.a.flag", "to": "step:001"},
-            {"id": "edge:002", "type": "writes_variable", "from": "step:001", "to": "variable:work.b.flag"},
+            {
+                "id": "edge:001",
+                "type": "reads_variable",
+                "from": "variable:work.a.flag",
+                "to": "step:001",
+                "evidence": {
+                    "kind": "UNKNOWN",
+                    "resolution": "NOT_ATTEMPTED",
+                    "confidence": None,
+                },
+            },
+            {
+                "id": "edge:002",
+                "type": "writes_variable",
+                "from": "step:001",
+                "to": "variable:work.b.flag",
+                "evidence": {
+                    "kind": "UNKNOWN",
+                    "resolution": "NOT_ATTEMPTED",
+                    "confidence": None,
+                },
+            },
         ],
     }
     path = tmp_path / "graph.json"
@@ -96,6 +116,41 @@ def test_query_lineage_serializes_successful_result(capsys, tmp_path):
     assert result["downstream_nodes"] == []
 
 
+def test_explain_edge_serializes_successful_result(capsys, tmp_path):
+    graph = _write_graph(tmp_path)
+
+    assert main([
+        "explain-edge",
+        "--graph",
+        str(graph),
+        "--edge",
+        "edge:001",
+    ]) == 0
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["edge"]["id"] == "edge:001"
+    assert result["evidence"]["kind"] == "UNKNOWN"
+    assert result["source"] is None
+    assert result["resolution_path"] == []
+    assert result["findings"] == []
+
+
+def test_explain_edge_unknown_id_is_a_query_failure(capsys, tmp_path):
+    graph = _write_graph(tmp_path)
+
+    assert main([
+        "explain-edge",
+        "--graph",
+        str(graph),
+        "--id",
+        "edge:missing",
+    ]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "explain-edge: edge not found: edge:missing\n"
+
+
 def test_query_failure_writes_one_line_stderr_and_no_stdout(capsys, tmp_path):
     graph = _write_graph(tmp_path)
 
@@ -123,6 +178,7 @@ def test_query_missing_graph_returns_failure_instead_of_traceback(capsys, tmp_pa
         ("query-search", ["--query", "step"]),
         ("query-lineage", ["--node", "step:001"]),
         ("query-impact", ["--variable", "variable:work.a.flag"]),
+        ("explain-edge", ["--edge", "edge:001"]),
     ],
 )
 def test_query_failed_run_is_a_clear_stderr_failure_for_each_subcommand(

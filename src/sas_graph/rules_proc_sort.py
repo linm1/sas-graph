@@ -11,6 +11,7 @@ without a second ordering mechanism.
 
 import re
 
+from .evidence import EvidenceKind, ResolutionStatus
 from .macro_state import resolve_text
 from .rules_data_step import by_vars as _normalize_by_vars
 
@@ -22,6 +23,39 @@ _OUT_OPT_RE = re.compile(r"\bout\s*=\s*([\w.&]+)", re.IGNORECASE)
 _DUPOUT_OPT_RE = re.compile(r"\bdupout\s*=\s*([\w.&]+)", re.IGNORECASE)
 _NODUPKEY_RE = re.compile(r"\bnodupkey\b", re.IGNORECASE)
 _BY_RE = re.compile(r"^by\s+(.+?);?$", re.IGNORECASE)
+_MACRO_REF_RE = re.compile(r"&[A-Za-z_]\w*\.?", re.IGNORECASE)
+_UNKNOWN_ID_PREFIXES = ("unknowndataset:", "unknownvariable:", "unknownmacro:")
+_SINGLE_QUOTED_RE = re.compile(r"'(?:''|[^'])*(?:'|$)", re.DOTALL)
+
+
+def _has_macro_ref(text):
+    return bool(_MACRO_REF_RE.search(_SINGLE_QUOTED_RE.sub("", str(text or ""))))
+
+
+def _edge_evidence(ctx, source, *endpoint_ids, macro_resolved=False):
+    extractor = source.get("rule", "rules_proc_sort") if isinstance(source, dict) else "rules_proc_sort"
+    if any(str(node_id).lower().startswith(_UNKNOWN_ID_PREFIXES) for node_id in endpoint_ids):
+        return ctx.make_evidence(
+            EvidenceKind.UNKNOWN,
+            ResolutionStatus.UNRESOLVED,
+            extractor,
+            source,
+        )
+    if macro_resolved and not _has_macro_ref(source.get("original_text", "")):
+        macro_resolved = False
+    if macro_resolved:
+        return ctx.make_evidence(
+            EvidenceKind.RESOLVED,
+            ResolutionStatus.EXACT,
+            extractor,
+            source,
+        )
+    return ctx.make_evidence(
+        EvidenceKind.OBSERVED,
+        ResolutionStatus.EXACT,
+        extractor,
+        source,
+    )
 
 
 def _dataset_id(raw, statement, ctx, let_events, rule):
@@ -83,15 +117,41 @@ def apply(block, ctx, let_events, source_order=None):
         source=block.as_source("proc_sort_out" if out_match else "proc_sort_implicit"),
     )
 
-    ctx.add_edge("reads_dataset", input_id, step_id, block.as_source("proc_sort_data"))
-    ctx.add_edge("writes_dataset", step_id, output_id, block.as_source("proc_sort_out"))
+    data_source = block.as_source("proc_sort_data")
+    out_source = block.as_source("proc_sort_out")
+    macro_resolved = _has_macro_ref(opener.original_text)
+    ctx.add_edge(
+        "reads_dataset", input_id, step_id, data_source,
+        evidence=_edge_evidence(
+            ctx, data_source, input_id, step_id, macro_resolved=macro_resolved,
+        ),
+    )
+    ctx.add_edge(
+        "writes_dataset", step_id, output_id, out_source,
+        evidence=_edge_evidence(
+            ctx, out_source, step_id, output_id, macro_resolved=macro_resolved,
+        ),
+    )
 
     dupout_match = _DUPOUT_OPT_RE.search(opener.text)
     if dupout_match:
         dupout_id = _dataset_id(dupout_match.group(1), opener, ctx, let_events, "proc_sort_dupout")
-        ctx.add_edge("writes_dataset", step_id, dupout_id, block.as_source("proc_sort_dupout"))
+        dupout_source = block.as_source("proc_sort_dupout")
+        ctx.add_edge(
+            "writes_dataset", step_id, dupout_id, dupout_source,
+            evidence=_edge_evidence(
+                ctx, dupout_source, step_id, dupout_id,
+                macro_resolved=macro_resolved,
+            ),
+        )
         if dupout_id != input_id:
-            ctx.add_edge("depends_on", dupout_id, input_id, block.as_source("proc_sort_dupout"))
+            ctx.add_edge(
+                "depends_on", dupout_id, input_id, dupout_source,
+                evidence=_edge_evidence(
+                    ctx, dupout_source, dupout_id, input_id,
+                    macro_resolved=macro_resolved,
+                ),
+            )
 
     patterns = []
     if output_id == input_id:
@@ -99,8 +159,13 @@ def apply(block, ctx, let_events, source_order=None):
             "IN_PLACE_SORT_OVERWRITE" if out_match else "IMPLICIT_IN_PLACE_SORT_OVERWRITE"
         )
     else:
+        out_source = block.as_source("proc_sort_out")
         ctx.add_edge(
-            "depends_on", output_id, input_id, block.as_source("proc_sort_out")
+            "depends_on", output_id, input_id, out_source,
+            evidence=_edge_evidence(
+                ctx, out_source, output_id, input_id,
+                macro_resolved=macro_resolved,
+            ),
         )
 
     if _NODUPKEY_RE.search(opener.text):

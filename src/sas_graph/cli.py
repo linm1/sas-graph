@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .config import load_config
 from .graph_io import load_graph, save_graph
-from .graph_queries import analyze_impact, search_nodes, trace_lineage
+from .graph_queries import analyze_impact, explain_edge, search_nodes, trace_lineage
 from .manifest import build_manifest, create_run_dir, save_manifest
 from .renderer_findings import render as render_findings
 from .renderer_mermaid import render as render_mermaid
@@ -76,6 +76,14 @@ def _query_impact(graph_path, variable):
         graph_path,
         "query-impact",
         lambda graph: analyze_impact(graph, variable),
+    )
+
+
+def _query_explain_edge(graph_path, edge):
+    return _query(
+        graph_path,
+        "explain-edge",
+        lambda graph: explain_edge(graph, edge),
     )
 
 
@@ -268,6 +276,10 @@ def build_parser():
     query_impact.add_argument("--graph", required=True)
     query_impact.add_argument("--variable", required=True)
 
+    explain = sub.add_parser("explain-edge")
+    explain.add_argument("--graph", required=True)
+    explain.add_argument("--edge", "--id", dest="edge", required=True)
+
     return parser
 
 
@@ -291,6 +303,9 @@ def main(argv=None):
 
     if args.command == "query-impact":
         return _query_impact(args.graph, args.variable)
+
+    if args.command == "explain-edge":
+        return _query_explain_edge(args.graph, args.edge)
 
     return _render(args.graph, args.out, render_findings)
 

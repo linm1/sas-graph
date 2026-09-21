@@ -8,6 +8,7 @@ the two emit functions, which consume IR objects and never parse source text.
 
 import re
 
+from .evidence import EvidenceKind, ResolutionStatus
 from .ir import (
     IRAssignment,
     IRBinaryOp,
@@ -32,6 +33,37 @@ _CONDITION_IDENTIFIER_EXCLUDED = {
     "_n_", "_error_",
 }
 _MAX_PARENTHESIS_DEPTH = 100
+_MACRO_REF_RE = re.compile(r"&[A-Za-z_]\w*\.?", re.IGNORECASE)
+_UNKNOWN_ID_PREFIXES = ("unknowndataset:", "unknownvariable:", "unknownmacro:")
+_SINGLE_QUOTED_RE = re.compile(r"'(?:''|[^'])*(?:'|$)", re.DOTALL)
+
+
+def _has_macro_ref(text):
+    return bool(_MACRO_REF_RE.search(_SINGLE_QUOTED_RE.sub("", str(text or ""))))
+
+
+def _edge_evidence(ctx, source, *endpoint_ids):
+    extractor = source.get("rule", "data_step_assignment") if isinstance(source, dict) else "data_step_assignment"
+    if any(str(node_id).lower().startswith(_UNKNOWN_ID_PREFIXES) for node_id in endpoint_ids):
+        return ctx.make_evidence(
+            EvidenceKind.UNKNOWN,
+            ResolutionStatus.UNRESOLVED,
+            extractor,
+            source,
+        )
+    if _has_macro_ref(source.get("original_text", "")):
+        return ctx.make_evidence(
+            EvidenceKind.RESOLVED,
+            ResolutionStatus.EXACT,
+            extractor,
+            source,
+        )
+    return ctx.make_evidence(
+        EvidenceKind.OBSERVED,
+        ResolutionStatus.EXACT,
+        extractor,
+        source,
+    )
 
 _BINARY_PRECEDENCE = {
     "=": 3,
@@ -439,6 +471,7 @@ def emit_assignment(
         variable_id = bind_variable(reference)
         ctx.add_edge(
             "reads_variable", variable_id, step_id, source,
+            evidence=_edge_evidence(ctx, source, variable_id, step_id),
             value=None, operator=None,
         )
 
@@ -446,6 +479,7 @@ def emit_assignment(
     literal = value.value if isinstance(value, IRLiteral) else None
     ctx.add_edge(
         "writes_variable", step_id, target_id, source,
+        evidence=_edge_evidence(ctx, source, step_id, target_id),
         value=literal, operator=None,
     )
 
@@ -460,6 +494,7 @@ def emit_assignment(
         expression_text = value.source_text
     ctx.add_edge(
         "derives", step_id, target_id, source,
+        evidence=_edge_evidence(ctx, source, step_id, target_id),
         expression=expression_text,
     )
 
@@ -481,6 +516,7 @@ def emit_assignment(
         variable_id = condition_binder(reference)
         ctx.add_edge(
             "conditioned_by", variable_id, step_id, source,
+            evidence=_edge_evidence(ctx, source, variable_id, step_id),
             condition_text=condition_text,
         )
 
@@ -503,11 +539,13 @@ def emit_condition(condition, ctx, step_id, source, bind_variable):
             left_id = bind_variable(comparison.left)
             ctx.add_edge(
                 "reads_variable", left_id, step_id, source,
+                evidence=_edge_evidence(ctx, source, left_id, step_id),
                 value=literal, operator=comparison.operator,
             )
         if isinstance(comparison.right, IRVariableRef):
             right_id = bind_variable(comparison.right)
             ctx.add_edge(
                 "reads_variable", right_id, step_id, source,
+                evidence=_edge_evidence(ctx, source, right_id, step_id),
                 value=None, operator=comparison.operator,
             )

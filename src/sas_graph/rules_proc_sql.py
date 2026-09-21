@@ -28,6 +28,7 @@ here (AND/OR, IN, LIKE, a subquery, or a multi-WHEN CASE) always produces a
 
 import re
 
+from .evidence import EvidenceKind, ResolutionStatus
 from .macro_state import resolve_text
 
 _INSERT_INTO_RE = re.compile(
@@ -136,6 +137,39 @@ _CASE_HEAD_RE = re.compile(r"^case\b", re.IGNORECASE)
 _WHEN_COUNT_RE = re.compile(r"\bwhen\b", re.IGNORECASE)
 _THEN_COUNT_RE = re.compile(r"\bthen\b", re.IGNORECASE)
 _ELSE_COUNT_RE = re.compile(r"\belse\b", re.IGNORECASE)
+_MACRO_REF_RE = re.compile(r"&[A-Za-z_]\w*\.?", re.IGNORECASE)
+_UNKNOWN_ID_PREFIXES = ("unknowndataset:", "unknownvariable:", "unknownmacro:")
+_SINGLE_QUOTED_RE = re.compile(r"'(?:''|[^'])*(?:'|$)", re.DOTALL)
+
+
+def _has_macro_ref(text):
+    return bool(_MACRO_REF_RE.search(_SINGLE_QUOTED_RE.sub("", str(text or ""))))
+
+
+def _edge_evidence(ctx, source, *endpoint_ids, macro_resolved=False):
+    extractor = source.get("rule", "rules_proc_sql") if isinstance(source, dict) else "rules_proc_sql"
+    if any(str(node_id).lower().startswith(_UNKNOWN_ID_PREFIXES) for node_id in endpoint_ids):
+        return ctx.make_evidence(
+            EvidenceKind.UNKNOWN,
+            ResolutionStatus.UNRESOLVED,
+            extractor,
+            source,
+        )
+    if macro_resolved and not _has_macro_ref(source.get("original_text", "")):
+        macro_resolved = False
+    if macro_resolved:
+        return ctx.make_evidence(
+            EvidenceKind.RESOLVED,
+            ResolutionStatus.EXACT,
+            extractor,
+            source,
+        )
+    return ctx.make_evidence(
+        EvidenceKind.OBSERVED,
+        ResolutionStatus.EXACT,
+        extractor,
+        source,
+    )
 
 
 def _next_sql_id(ctx, node_type, prefix):
@@ -411,23 +445,41 @@ def _apply_statement(
     ctx.add_edge(
         "contains_sql_statement", sql_block_id, sql_statement_id,
         source=statement.as_source(rule),
+        evidence=_edge_evidence(
+            ctx, statement.as_source(rule), sql_block_id, sql_statement_id,
+        ),
     )
 
     for source_id in source_ids:
+        source = statement.as_source(f"{rule}_source")
         ctx.add_edge(
             "reads_dataset", source_id, sql_statement_id,
-            statement.as_source(f"{rule}_source"),
+            source,
+            evidence=_edge_evidence(
+                ctx, source, source_id, sql_statement_id,
+                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            ),
         )
     write_kwargs = {}
     if subtype == "CREATE_VIEW":
         write_kwargs = {"output_kind": "view", "materialized": False}
+    target_source = statement.as_source(f"{rule}_target")
     ctx.add_edge(
-        "writes_dataset", sql_statement_id, target_id,
-        statement.as_source(f"{rule}_target"), **write_kwargs,
+        "writes_dataset", sql_statement_id, target_id, target_source,
+        evidence=_edge_evidence(
+            ctx, target_source, sql_statement_id, target_id,
+            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+        ),
+        **write_kwargs,
     )
     for source_id in source_ids:
+        source = statement.as_source(rule)
         ctx.add_edge(
-            "depends_on", target_id, source_id, statement.as_source(rule),
+            "depends_on", target_id, source_id, source,
+            evidence=_edge_evidence(
+                ctx, source, target_id, source_id,
+                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            ),
         )
 
     insert_target_columns = (
@@ -586,8 +638,13 @@ def _predicate_edges(
     lhs_id = _resolve_column_ref(
         ctx, statement, alias_map, source_ids, lhs, unresolved_names
     )
+    predicate_source = statement.as_source(rule)
     ctx.add_edge(
-        "reads_variable", lhs_id, sql_statement_id, statement.as_source(rule),
+        "reads_variable", lhs_id, sql_statement_id, predicate_source,
+        evidence=_edge_evidence(
+            ctx, predicate_source, lhs_id, sql_statement_id,
+            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+        ),
         value=value, operator=operator,
     )
     if rhs_ref is not None:
@@ -595,7 +652,11 @@ def _predicate_edges(
             ctx, statement, alias_map, source_ids, rhs_ref, unresolved_names
         )
         ctx.add_edge(
-            "reads_variable", rhs_id, sql_statement_id, statement.as_source(rule),
+            "reads_variable", rhs_id, sql_statement_id, predicate_source,
+            evidence=_edge_evidence(
+                ctx, predicate_source, rhs_id, sql_statement_id,
+                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            ),
             value=None, operator=operator,
         )
     return True
@@ -673,8 +734,13 @@ def _apply_column_list_clause(
         ref_id = _resolve_column_ref(
             ctx, statement, alias_map, source_ids, ref
         )
+        column_source = statement.as_source(rule)
         ctx.add_edge(
-            "reads_variable", ref_id, sql_statement_id, statement.as_source(rule),
+            "reads_variable", ref_id, sql_statement_id, column_source,
+            evidence=_edge_evidence(
+                ctx, column_source, ref_id, sql_statement_id,
+                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            ),
             value=None, operator=None,
         )
 
@@ -740,8 +806,13 @@ def _apply_expression_reads(
         read_id = _resolve_column_ref(
             ctx, statement, alias_map, source_ids, ref, unresolved_names
         )
+        expression_source = statement.as_source(rule)
         ctx.add_edge(
-            "reads_variable", read_id, sql_statement_id, statement.as_source(rule),
+            "reads_variable", read_id, sql_statement_id, expression_source,
+            evidence=_edge_evidence(
+                ctx, expression_source, read_id, sql_statement_id,
+                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            ),
             value=None, operator=None,
         )
     return refs
@@ -786,8 +857,13 @@ def _apply_insert_set(
                 _mask_quoted(_mask_literal_residue(expression)), rule, (),
             )
         write_id = ctx.add_variable(target_raw, column)
+        write_source = statement.as_source(rule)
         ctx.add_edge(
-            "writes_variable", sql_statement_id, write_id, statement.as_source(rule),
+            "writes_variable", sql_statement_id, write_id, write_source,
+            evidence=_edge_evidence(
+                ctx, write_source, sql_statement_id, write_id,
+                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            ),
             value=literal, operator=None,
         )
 
@@ -839,8 +915,13 @@ def _apply_insert_values(
                 _mask_quoted(_mask_literal_residue(expression)), rule, (),
             )
         write_id = ctx.add_variable(target_raw, column)
+        write_source = statement.as_source(rule)
         ctx.add_edge(
-            "writes_variable", sql_statement_id, write_id, statement.as_source(rule),
+            "writes_variable", sql_statement_id, write_id, write_source,
+            evidence=_edge_evidence(
+                ctx, write_source, sql_statement_id, write_id,
+                macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+            ),
             value=literal, operator=None,
         )
 
@@ -851,14 +932,23 @@ def _apply_bare_select_column(
 ):
     rule = "proc_sql_select_column"
     read_id = _resolve_column_ref(ctx, statement, alias_map, source_ids, expr)
+    select_source = statement.as_source(rule)
     ctx.add_edge(
-        "reads_variable", read_id, sql_statement_id, statement.as_source(rule),
+        "reads_variable", read_id, sql_statement_id, select_source,
+        evidence=_edge_evidence(
+            ctx, select_source, read_id, sql_statement_id,
+            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+        ),
         value=None, operator=None,
     )
     write_name = write_name if write_name is not None else alias or expr.rsplit(".", 1)[-1]
     write_id = ctx.add_variable(target_raw, write_name)
     ctx.add_edge(
-        "writes_variable", sql_statement_id, write_id, statement.as_source(rule),
+        "writes_variable", sql_statement_id, write_id, select_source,
+        evidence=_edge_evidence(
+            ctx, select_source, sql_statement_id, write_id,
+            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+        ),
         value=None, operator=None,
     )
 
@@ -895,8 +985,13 @@ def _apply_computed_select_column(
     literal = None if refs else _bare_literal_expr_value(original_column, alias)
     write_name = write_name if write_name is not None else alias
     write_id = ctx.add_variable(target_raw, write_name)
+    expression_source = statement.as_source(rule)
     ctx.add_edge(
-        "writes_variable", sql_statement_id, write_id, statement.as_source(rule),
+        "writes_variable", sql_statement_id, write_id, expression_source,
+        evidence=_edge_evidence(
+            ctx, expression_source, sql_statement_id, write_id,
+            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+        ),
         value=literal, operator=None,
     )
 
@@ -990,8 +1085,13 @@ def _apply_case_select_column(
 
     write_name = write_name if write_name is not None else alias
     write_id = ctx.add_variable(target_raw, write_name)
+    case_source = statement.as_source(rule)
     ctx.add_edge(
-        "writes_variable", sql_statement_id, write_id, statement.as_source(rule),
+        "writes_variable", sql_statement_id, write_id, case_source,
+        evidence=_edge_evidence(
+            ctx, case_source, sql_statement_id, write_id,
+            macro_resolved=bool(_MACRO_REF_RE.search(statement.original_text)),
+        ),
         value=None, operator=None,
     )
 

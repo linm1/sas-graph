@@ -281,3 +281,94 @@ def analyze_impact(
         limit=limit,
         include_metadata=True,
     )
+
+
+def _records_by_id(graph):
+    records = {}
+    if not isinstance(graph, dict):
+        return records
+    for category in ("nodes", "edges", "findings"):
+        items = graph.get(category, [])
+        if not isinstance(items, list):
+            continue
+        for record in items:
+            if not isinstance(record, dict) or record.get("id") is None:
+                continue
+            records[record["id"]] = record
+    return records
+
+
+def explain_edge(graph, edge_id, index=None, limit=DEFAULT_LIMIT):
+    """Return one edge, its evidence, derivation records, and linked findings.
+
+    The graph remains the source of truth: this function only projects records
+    already present in it.  Derivation records and findings are sorted by their
+    existing ids and bounded by the same result limit as the other queries.
+    """
+    _, limit = validate_bounds(DEFAULT_DEPTH, limit)
+    if index is None:
+        index = GraphIndex(graph)
+
+    edges = graph.get("edges", []) if isinstance(graph, dict) else []
+    edge = next(
+        (
+            record
+            for record in edges
+            if isinstance(record, dict) and record.get("id") == edge_id
+        ),
+        None,
+    )
+    if edge is None:
+        raise ValueError(f"edge not found: {edge_id}")
+
+    evidence = edge.get("evidence")
+    derivation_refs = (
+        evidence.get("derivation_refs", [])
+        if isinstance(evidence, dict)
+        else []
+    )
+    if not isinstance(derivation_refs, list):
+        derivation_refs = []
+    records_by_id = _records_by_id(graph)
+    resolution_path = [
+        records_by_id[record_id]
+        for record_id in sorted(set(derivation_refs), key=str)
+        if record_id in records_by_id
+    ]
+    path_truncated = len(resolution_path) > limit
+    path_continuation = [
+        record.get("id") for record in resolution_path[limit:]
+    ] if path_truncated else []
+    resolution_path = resolution_path[:limit]
+
+    linked = {}
+    for object_id in {edge.get("id"), edge.get("from"), edge.get("to")}:
+        for finding in index.findings_by_affected_object.get(object_id, []):
+            finding_id = finding.get("id")
+            if finding_id is not None:
+                linked[finding_id] = finding
+    findings = sorted(linked.values(), key=_record_id)
+    findings_truncated = len(findings) > limit
+    findings_continuation = [
+        finding.get("id") for finding in findings[limit:]
+    ] if findings_truncated else []
+    findings = findings[:limit]
+
+    continuation = sorted(
+        set(path_continuation + findings_continuation), key=str
+    )
+    return {
+        "edge": dict(edge),
+        "evidence": evidence,
+        "source": edge.get("source"),
+        "resolution_path": resolution_path,
+        "findings": findings,
+        "truncated": path_truncated or findings_truncated,
+        "visited_count": (
+            len(resolution_path) + len(path_continuation)
+            + len(findings) + len(findings_continuation)
+        ),
+        "limit_hit": path_truncated or findings_truncated,
+        "depth_hit": False,
+        "continuation": continuation,
+    }

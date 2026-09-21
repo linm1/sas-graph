@@ -19,6 +19,7 @@ from .data_step_ir import (
     parse_assignment as _parse_assignment_ir,
     parse_condition as _parse_condition_ir,
 )
+from .evidence import EvidenceKind, ResolutionStatus
 from .macro_state import resolve_text
 
 _SET_RE = re.compile(r"^set\s+(.+?);?$", re.IGNORECASE)
@@ -132,6 +133,39 @@ _QUOTED_SPAN_RE = re.compile(
 # `data work.a work.b;` -- one or more space-separated dataset names, `_null_`
 # excluded because it is a keyword, not a dataset (section 12.8).
 _DATA_HEADER_RE = re.compile(r"^data\s+(.+?);?$", re.IGNORECASE)
+_MACRO_REF_RE = re.compile(r"&[A-Za-z_]\w*\.?", re.IGNORECASE)
+_UNKNOWN_ID_PREFIXES = ("unknowndataset:", "unknownvariable:", "unknownmacro:")
+_SINGLE_QUOTED_RE = re.compile(r"'(?:''|[^'])*(?:'|$)", re.DOTALL)
+
+
+def _has_macro_ref(text):
+    """Return whether SAS macro syntax remains outside single-quoted text."""
+    return bool(_MACRO_REF_RE.search(_SINGLE_QUOTED_RE.sub("", str(text or ""))))
+
+
+def _edge_evidence(ctx, source, *endpoint_ids, macro_sources=()):
+    """Classify an edge from the endpoint and source facts this rule has."""
+    extractor = source.get("rule", "rules_data_step") if isinstance(source, dict) else "rules_data_step"
+    if any(str(node_id).lower().startswith(_UNKNOWN_ID_PREFIXES) for node_id in endpoint_ids):
+        return ctx.make_evidence(
+            EvidenceKind.UNKNOWN,
+            ResolutionStatus.UNRESOLVED,
+            extractor,
+            source,
+        )
+    if any(_has_macro_ref(text) for text in macro_sources):
+        return ctx.make_evidence(
+            EvidenceKind.RESOLVED,
+            ResolutionStatus.EXACT,
+            extractor,
+            source,
+        )
+    return ctx.make_evidence(
+        EvidenceKind.OBSERVED,
+        ResolutionStatus.EXACT,
+        extractor,
+        source,
+    )
 
 
 def _data_targets(opener_text):
@@ -498,9 +532,17 @@ def _emit_keep_or_drop(list_text, edge_type, rule, statement, ctx, step_id, bind
     for name in tokens:
         var_id = _bind_variable(name, binding, statement.statement_order, source, ctx)
         if edge_type == "writes_variable":
-            ctx.add_edge("writes_variable", step_id, var_id, source, value=None, operator=None)
+            ctx.add_edge(
+                "writes_variable", step_id, var_id, source,
+                evidence=_edge_evidence(ctx, source, step_id, var_id),
+                value=None, operator=None,
+            )
         else:
-            ctx.add_edge("reads_variable", var_id, step_id, source, value=None, operator=None)
+            ctx.add_edge(
+                "reads_variable", var_id, step_id, source,
+                evidence=_edge_evidence(ctx, source, var_id, step_id),
+                value=None, operator=None,
+            )
 
 
 def _emit_rename(pair_text, statement, ctx, step_id, binding):
@@ -513,9 +555,17 @@ def _emit_rename(pair_text, statement, ctx, step_id, binding):
     source = statement.as_source("data_step_rename")
     for old_name, new_name in pairs:
         old_id = _bind_variable(old_name, binding, statement.statement_order, source, ctx)
-        ctx.add_edge("reads_variable", old_id, step_id, source, value=None, operator=None)
+        ctx.add_edge(
+            "reads_variable", old_id, step_id, source,
+            evidence=_edge_evidence(ctx, source, old_id, step_id),
+            value=None, operator=None,
+        )
         new_id = _bind_variable(new_name, binding, statement.statement_order, source, ctx)
-        ctx.add_edge("writes_variable", step_id, new_id, source, value=None, operator=None)
+        ctx.add_edge(
+            "writes_variable", step_id, new_id, source,
+            evidence=_edge_evidence(ctx, source, step_id, new_id),
+            value=None, operator=None,
+        )
 
 
 def _emit_action(action, statement, ctx, step_id, binding, let_events, condition=None):
@@ -535,7 +585,11 @@ def _emit_call_missing(argument_text, statement, ctx, step_id, binding):
     source = statement.as_source("data_step_call_missing")
     for name in names:
         var_id = _bind_variable(name, binding, statement.statement_order, source, ctx)
-        ctx.add_edge("writes_variable", step_id, var_id, source, value=None, operator=None)
+        ctx.add_edge(
+            "writes_variable", step_id, var_id, source,
+            evidence=_edge_evidence(ctx, source, step_id, var_id),
+            value=None, operator=None,
+        )
 
 
 def _emit_call(routine, argument_text, statement, ctx, step_id, binding):
@@ -565,7 +619,11 @@ def _emit_call(routine, argument_text, statement, ctx, step_id, binding):
     source = statement.as_source(f"data_step_call_{routine}")
     for name in _rhs_identifiers(expression):
         var_id = _bind_variable(name, binding, statement.statement_order, source, ctx)
-        ctx.add_edge("reads_variable", var_id, step_id, source, value=None, operator=None)
+        ctx.add_edge(
+            "reads_variable", var_id, step_id, source,
+            evidence=_edge_evidence(ctx, source, var_id, step_id),
+            value=None, operator=None,
+        )
 
 
 def _emit_sum_statement(lhs, rhs, statement, ctx, step_id, binding):
@@ -576,9 +634,17 @@ def _emit_sum_statement(lhs, rhs, statement, ctx, step_id, binding):
     source = statement.as_source("data_step_sum_statement")
     for name in dict.fromkeys([lhs, *_rhs_identifiers(rhs)]):
         var_id = _bind_variable(name, binding, statement.statement_order, source, ctx)
-        ctx.add_edge("reads_variable", var_id, step_id, source, value=None, operator=None)
+        ctx.add_edge(
+            "reads_variable", var_id, step_id, source,
+            evidence=_edge_evidence(ctx, source, var_id, step_id),
+            value=None, operator=None,
+        )
     target_id = _bind_variable(lhs, binding, statement.statement_order, source, ctx)
-    ctx.add_edge("writes_variable", step_id, target_id, source, value=None, operator=None)
+    ctx.add_edge(
+        "writes_variable", step_id, target_id, source,
+        evidence=_edge_evidence(ctx, source, step_id, target_id),
+        value=None, operator=None,
+    )
 
 
 def _emit_input_or_put(kind, body, statement, ctx, step_id, binding):
@@ -605,9 +671,17 @@ def _emit_input_or_put(kind, body, statement, ctx, step_id, binding):
     for name in names:
         var_id = _bind_variable(name, binding, statement.statement_order, source, ctx)
         if edge_type == "writes_variable":
-            ctx.add_edge(edge_type, step_id, var_id, source, value=None, operator=None)
+            ctx.add_edge(
+                edge_type, step_id, var_id, source,
+                evidence=_edge_evidence(ctx, source, step_id, var_id),
+                value=None, operator=None,
+            )
         else:
-            ctx.add_edge(edge_type, var_id, step_id, source, value=None, operator=None)
+            ctx.add_edge(
+                edge_type, var_id, step_id, source,
+                evidence=_edge_evidence(ctx, source, var_id, step_id),
+                value=None, operator=None,
+            )
 
 
 def _emit_variable_edges(
@@ -689,6 +763,7 @@ def _emit_variable_edges(
                 )
                 ctx.add_edge(
                     "reads_variable", var_id, step_id, source,
+                    evidence=_edge_evidence(ctx, source, var_id, step_id),
                     value=None, operator=None,
                 )
             select_active = True
@@ -835,15 +910,33 @@ def apply(block, ctx, let_events, sort_by_fallback=None):
     input_ids = [*set_inputs, *((dataset_id, source) for dataset_id, source, _ in merge_inputs)]
 
     for input_id, input_source in input_ids:
-        ctx.add_edge("reads_dataset", input_id, step_id, input_source)
+        ctx.add_edge(
+            "reads_dataset", input_id, step_id, input_source,
+            evidence=_edge_evidence(
+                ctx, input_source, input_id, step_id,
+                macro_sources=(input_source.get("original_text"),),
+            ),
+        )
 
     for output_id in output_ids:
+        output_source = block.as_source("data_step_output")
         ctx.add_edge(
-            "writes_dataset", step_id, output_id, block.as_source("data_step_output")
+            "writes_dataset", step_id, output_id, output_source,
+            evidence=_edge_evidence(
+                ctx, output_source, step_id, output_id,
+                macro_sources=(opener.original_text,),
+            ),
         )
         for input_id, input_source in input_ids:
             ctx.add_edge(
-                "depends_on", output_id, input_id, input_source
+                "depends_on", output_id, input_id, input_source,
+                evidence=_edge_evidence(
+                    ctx, input_source, output_id, input_id,
+                    macro_sources=(
+                        input_source.get("original_text"),
+                        opener.original_text,
+                    ),
+                ),
             )
             if input_id == output_id:
                 patterns.append("IN_PLACE_OVERWRITE")
@@ -954,8 +1047,13 @@ def _apply_null_data(block, ctx, let_events):
                 ctx,
             )
             for input_id in input_ids:
+                source = statement.as_source("data_step_set")
                 ctx.add_edge(
-                    "reads_dataset", input_id, step_id, statement.as_source("data_step_set")
+                    "reads_dataset", input_id, step_id, source,
+                    evidence=_edge_evidence(
+                        ctx, source, input_id, step_id,
+                        macro_sources=(source.get("original_text"),),
+                    ),
                 )
 
     if re.search(r"call\s+symputx\s*\(", " ".join(s.text for s in block.statements), re.IGNORECASE):
