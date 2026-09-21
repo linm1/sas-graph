@@ -202,9 +202,9 @@ _COLUMN_ALIAS_RE = re.compile(
     r"(?:\s+(?:length|format|label)\s*=\s*.*)?$",
     re.IGNORECASE | re.DOTALL,
 )
-_BARE_COLUMN_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?$")
+_BARE_COLUMN_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 _IDENTIFIER_RE = re.compile(
-    r"(?<!\.)\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?)\b\s*(\()?(?!\s*\.)"
+    r"(?<!\.)\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\b\s*(\()?(?!\s*\.)"
 )
 _N_LITERAL_RE = re.compile(r"['\"][^'\"]*['\"]\s*n\b", re.IGNORECASE)
 _LITERAL_SUFFIX_RE = re.compile(
@@ -897,8 +897,18 @@ def resolve_reference(
     if raw.startswith("&"):
         raw = raw[1:].rstrip(".")
     if "." in raw:
-        qualifier, variable_name = raw.split(".", 1)
-        dataset_id = alias_map.get(qualifier.lower())
+        parts = raw.split(".")
+        variable_name = parts[-1]
+        dataset_id = alias_map.get(parts[0].lower())
+        if dataset_id is not None:
+            variable_name = ".".join(parts[1:])
+        else:
+            for split_at in range(len(parts) - 1, 0, -1):
+                qualifier = ".".join(parts[:split_at]).lower()
+                dataset_id = alias_map.get(qualifier)
+                if dataset_id is not None:
+                    variable_name = ".".join(parts[split_at:])
+                    break
         candidates = (dataset_id,) if dataset_id is not None else ()
     else:
         variable_name = raw
@@ -1370,6 +1380,19 @@ def emit_sql(
     for resolved_join in resolved.joins:
         predicate = resolved_join.predicate
         if predicate is None:
+            if resolved_join.join.kind != "CROSS":
+                ctx.add_finding(
+                    "proc_sql_unsupported_syntax",
+                    "NOT_EXECUTED",
+                    "WARNING",
+                    sql_statement_id,
+                    "JOIN source `{}` has no ON predicate; it was not parsed.".format(
+                        resolved_join.join.source.raw_name
+                    ),
+                    "Add an ON predicate to capture join lineage.",
+                    statement.as_source("proc_sql_join"),
+                    affected_nodes=[sql_statement_id],
+                )
             continue
         if not isinstance(predicate.expression, IRComparison):
             _predicate_reads(
@@ -1401,7 +1424,7 @@ def emit_sql(
         resolved.where,
         "proc_sql_where_condition",
         semantic_edges,
-        filter_semantics=semantic_edges and len(resolved.source_ids) > 1,
+        filter_semantics=semantic_edges,
     )
     for group in resolved.group_by:
         bindings = group.bindings
@@ -1451,7 +1474,7 @@ def emit_sql(
         resolved.having,
         "proc_sql_having_condition",
         semantic_edges,
-        filter_semantics=semantic_edges and len(resolved.source_ids) > 1,
+        filter_semantics=semantic_edges,
     )
     for resolved_order in resolved.order_by:
         bindings = resolved_order.expression.bindings

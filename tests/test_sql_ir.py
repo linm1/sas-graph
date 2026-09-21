@@ -93,6 +93,52 @@ def test_resolver_binds_qualified_reference_through_statement_alias():
     assert binding.variable_name == "id"
 
 
+def test_resolver_binds_two_level_qualified_reference_through_source_name():
+    ir = parse("create table work.out as select adam.adlb.anl01fl from adam.adlb")
+    resolved = sql_ir.resolve_sql(
+        ir,
+        ("dataset:adam.adlb",),
+        {"adam.adlb": "dataset:adam.adlb"},
+    )
+
+    binding = resolved.select_items[0].expression.bindings[0]
+    assert binding.exact is True
+    assert binding.dataset_id == "dataset:adam.adlb"
+    assert binding.variable_name == "anl01fl"
+
+
+def test_resolver_declines_unmatched_qualifier_with_trailing_identifier():
+    ir = parse("create table work.out as select unknown.adlb.anl01fl from adam.adlb")
+    resolved = sql_ir.resolve_sql(
+        ir,
+        ("dataset:adam.adlb",),
+        {"adam.adlb": "dataset:adam.adlb"},
+    )
+
+    binding = resolved.select_items[0].expression.bindings[0]
+    assert binding.exact is False
+    assert binding.dataset_id is None
+    assert binding.variable_name == "anl01fl"
+
+
+def test_single_source_exact_filter_emits_filters_dataset_edge():
+    text = (
+        "proc sql; create table work.out as select a.anl01fl "
+        "from adam.adlb as a where a.anl01fl = 'Y'; quit;"
+    )
+    split = split_statements(text, "sql.sas")
+    blocks, _ = group_blocks(split.statements)
+    ctx = GraphContext(
+        main_programs=["sql.sas"], setup_file="setup.sas", run_id="r-single"
+    )
+    rules_proc_sql.apply(blocks[0], ctx, walk_let_statements(split.statements))
+
+    filters = [edge for edge in ctx.edges if edge["type"] == "filters_dataset"]
+    assert len(filters) == 1
+    assert filters[0]["from"] == "variable:adam.adlb.anl01fl"
+    assert filters[0]["to"] == "sqlstatement:001"
+
+
 def test_emit_sql_new_edges_require_exact_bindings_and_keep_unknown_finding():
     text = (
         "proc sql; create table work.out as select a.id "
@@ -123,12 +169,27 @@ def test_emit_sql_new_edges_require_exact_bindings_and_keep_unknown_finding():
 
 def test_emit_function_has_no_regex_calls():
     tree = ast.parse(open(sql_ir.__file__, encoding="utf-8").read())
-    emit = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "emit_sql")
+    emission_names = {
+        "emit_sql",
+        "_emit_select",
+        "_emit_predicate_clause",
+        "_predicate_reads",
+        "_semantic_edge",
+        "_expression_reads",
+    }
+    emission_functions = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name in emission_names
+    }
+    assert emission_functions == emission_names
     assert not any(
         isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
         and node.value.id == "re"
-        for node in ast.walk(emit)
+        for function in ast.walk(tree)
+        if isinstance(function, ast.FunctionDef) and function.name in emission_names
+        for node in ast.walk(function)
     )
 
 

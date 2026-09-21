@@ -58,8 +58,6 @@ def _edge_evidence(ctx, source, *endpoint_ids, macro_resolved=False):
             extractor,
             source,
         )
-    if macro_resolved and not _has_macro_ref(source.get("original_text", "")):
-        macro_resolved = False
     if macro_resolved:
         return ctx.make_evidence(
             EvidenceKind.RESOLVED,
@@ -254,12 +252,14 @@ def _apply_statement(
         for raw in unique_raw_names
     }
     source_ids = [raw_to_id[raw] for raw in unique_raw_names]
-    alias_map = {
-        source.alias.lower(): raw_to_id[source.raw_name]
-        for source in query.sources
-        if source.alias
-    }
-
+    alias_map = {raw.lower(): raw_to_id[raw] for raw in unique_raw_names}
+    alias_map.update(
+        {
+            source.alias.lower(): raw_to_id[source.raw_name]
+            for source in query.sources
+            if source.alias
+        }
+    )
     sql_statement_id = _next_sql_id(ctx, "SqlStatement", "sqlstatement")
     extra = {"sql_subtype": subtype}
     if subtype == "INSERT_INTO":
@@ -366,10 +366,6 @@ def _apply_statement(
             )
         else:
             resolved = sql_ir.resolve_sql(query, source_ids, alias_map)
-            # Selection/group/order/join semantics are IR facts.  Filter edges
-            # are restricted to multi-source statements so the pre-B2
-            # single-table gold fixture remains byte-identical while the
-            # synthetic B2 fixture exercises an exact and an ambiguous filter.
             sql_ir.emit_sql(
                 resolved,
                 ctx,

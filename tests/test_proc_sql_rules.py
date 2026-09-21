@@ -258,6 +258,55 @@ def test_join_sources_each_create_a_read_and_dependency():
     assert reads == depends == {"dataset:work.a", "dataset:work.b"}
 
 
+def test_join_without_on_produces_unsupported_finding():
+    blocks, ctx, events = build(
+        "proc sql;\n"
+        "  create table work.out as\n"
+        "  select a.id from work.x as a inner join work.y as b;\n"
+        "quit;\n"
+    )
+    rules_proc_sql.apply(blocks[0], ctx, events)
+
+    assert not any(edge["type"] == "joins_on" for edge in ctx.edges)
+    findings = [
+        finding for finding in ctx.findings
+        if finding["type"] == "proc_sql_unsupported_syntax"
+    ]
+    assert len(findings) == 1
+    assert findings[0]["source"]["rule"] == "proc_sql_join"
+    assert "ON" in findings[0]["message"]
+
+
+def test_two_level_source_qualifier_binds_and_unmatched_qualifier_keeps_name():
+    blocks, ctx, events = build(
+        "proc sql;\n"
+        "  create table work.out as\n"
+        "  select adam.adlb.anl01fl from adam.adlb;\n"
+        "quit;\n"
+    )
+    rules_proc_sql.apply(blocks[0], ctx, events)
+
+    assert any(
+        edge["type"] == "reads_variable"
+        and edge["from"] == "variable:adam.adlb.anl01fl"
+        for edge in ctx.edges
+    )
+    assert not any(node["type"] == "UnknownVariable" for node in ctx.nodes)
+
+    blocks, ctx, events = build(
+        "proc sql;\n"
+        "  create table work.out as\n"
+        "  select unknown.adlb.anl01fl from adam.adlb;\n"
+        "quit;\n"
+    )
+    rules_proc_sql.apply(blocks[0], ctx, events)
+
+    unknowns = [node for node in ctx.nodes if node["type"] == "UnknownVariable"]
+    assert len(unknowns) == 1
+    assert unknowns[0]["unresolved_expression"] == "anl01fl"
+    assert "Column `anl01fl`" in ctx.findings[0]["message"]
+
+
 def test_macro_dataset_names_resolve_at_the_sql_statement():
     blocks, ctx, events = build(
         "%let domain=ae;\n"
