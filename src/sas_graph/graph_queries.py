@@ -8,6 +8,7 @@ from .graph_index import (
     GraphIndex,
     validate_bounds,
 )
+from .impact_modes import IMPACT_MODES, impact
 from .variable_lineage_walk import walk_variable_impact
 
 _LINEAGE_EDGE_TYPES = {"reads_dataset", "writes_dataset"}
@@ -263,14 +264,26 @@ def analyze_impact(
     depth=DEFAULT_DEPTH,
     limit=DEFAULT_LIMIT,
     index=None,
+    mode=None,
+    modes=None,
 ):
-    """Validate and run the bounded variable-level impact walk."""
+    """Run the legacy variable walk or the evidence-aware mode traversal."""
     depth, limit = validate_bounds(depth, limit)
     if index is None:
         index = GraphIndex(graph)
     node = index.nodes_by_id.get(variable_id)
     if node is None:
         raise ValueError(f"variable not found: {variable_id}")
+    if mode is not None or modes is not None:
+        return impact(
+            graph,
+            variable_id,
+            mode=mode,
+            modes=modes,
+            depth=depth,
+            limit=limit,
+            index=index,
+        )
     if node.get("type") not in _IMPACT_NODE_TYPES:
         raise ValueError("impact start must be a Variable or UnknownVariable")
     return walk_variable_impact(

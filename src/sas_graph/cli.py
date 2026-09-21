@@ -18,7 +18,15 @@ from pathlib import Path
 
 from .config import load_config
 from .graph_io import load_graph, save_graph
-from .graph_queries import analyze_impact, explain_edge, search_nodes, trace_lineage
+from .graph_index import DEFAULT_DEPTH, DEFAULT_LIMIT
+from .graph_queries import (
+    IMPACT_MODES,
+    analyze_impact,
+    explain_edge,
+    impact,
+    search_nodes,
+    trace_lineage,
+)
 from .manifest import build_manifest, create_run_dir, save_manifest
 from .renderer_findings import render as render_findings
 from .renderer_mermaid import render as render_mermaid
@@ -71,11 +79,31 @@ def _query_lineage(graph_path, node, direction):
     )
 
 
-def _query_impact(graph_path, variable):
+def _query_impact(graph_path, variable, depth=DEFAULT_DEPTH, limit=DEFAULT_LIMIT):
     return _query(
         graph_path,
         "query-impact",
-        lambda graph: analyze_impact(graph, variable),
+        lambda graph: analyze_impact(graph, variable, depth=depth, limit=limit),
+    )
+
+
+def _query_impact_modes(
+    graph_path,
+    node,
+    modes=None,
+    depth=DEFAULT_DEPTH,
+    limit=DEFAULT_LIMIT,
+):
+    return _query(
+        graph_path,
+        "query-impact",
+        lambda graph: impact(
+            graph,
+            node,
+            modes=modes,
+            depth=depth,
+            limit=limit,
+        ),
     )
 
 
@@ -274,7 +302,14 @@ def build_parser():
 
     query_impact = sub.add_parser("query-impact")
     query_impact.add_argument("--graph", required=True)
-    query_impact.add_argument("--variable", required=True)
+    impact_start = query_impact.add_mutually_exclusive_group(required=True)
+    impact_start.add_argument("--variable")
+    impact_start.add_argument("--node")
+    query_impact.add_argument(
+        "--mode", choices=IMPACT_MODES, action="append"
+    )
+    query_impact.add_argument("--depth", type=int, default=DEFAULT_DEPTH)
+    query_impact.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
 
     explain = sub.add_parser("explain-edge")
     explain.add_argument("--graph", required=True)
@@ -302,7 +337,21 @@ def main(argv=None):
         return _query_lineage(args.graph, args.node, args.direction)
 
     if args.command == "query-impact":
-        return _query_impact(args.graph, args.variable)
+        if args.mode is not None or args.node is not None:
+            node = args.node if args.node is not None else args.variable
+            return _query_impact_modes(
+                args.graph,
+                node,
+                modes=args.mode,
+                depth=args.depth,
+                limit=args.limit,
+            )
+        return _query_impact(
+            args.graph,
+            args.variable,
+            depth=args.depth,
+            limit=args.limit,
+        )
 
     if args.command == "explain-edge":
         return _query_explain_edge(args.graph, args.edge)
