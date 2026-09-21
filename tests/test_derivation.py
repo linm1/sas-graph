@@ -45,6 +45,11 @@ def _legacy_graph(graph):
 def test_derivation_flag_off_preserves_the_legacy_fixture_graph():
     """The off path keeps nodes, existing edges, and findings unchanged."""
 
+    always_on_capabilities = [
+        "dataset_lineage",
+        "variable_lineage",
+        "evidence_v1",
+    ]
     expected_new_edges = {
         "basic_adae": (0, 0),
         "variable_lineage": (4, 0),
@@ -54,8 +59,10 @@ def test_derivation_flag_off_preserves_the_legacy_fixture_graph():
         enabled = _run_fixture(name, derivation_v1=True)
         disabled = _run_fixture(name, derivation_v1=False)
         assert _legacy_graph(disabled) == _legacy_graph(enabled)
-        assert "derivation_v1" in enabled["schema"]["capabilities"]
-        assert "derivation_v1" not in disabled.get("schema", {}).get("capabilities", [])
+        assert enabled["schema"]["capabilities"] == always_on_capabilities + [
+            "derivation_v1"
+        ]
+        assert disabled["schema"]["capabilities"] == always_on_capabilities
         assert (
             sum(edge["type"] == "derives" for edge in enabled["edges"]),
             sum(edge["type"] == "conditioned_by" for edge in enabled["edges"]),

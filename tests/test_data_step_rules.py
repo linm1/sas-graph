@@ -794,7 +794,11 @@ def test_derivation_capability_off_preserves_existing_assignment_edges():
     assert not any(edge["type"] == "derives" for edge in ctx.edges)
     assert not any(edge["type"] == "conditioned_by" for edge in ctx.edges)
     assert any(edge["type"] == "writes_variable" for edge in ctx.edges)
-    assert "schema" not in ctx.to_graph()
+    assert ctx.to_graph()["schema"]["capabilities"] == [
+        "dataset_lineage",
+        "variable_lineage",
+        "evidence_v1",
+    ]
 
 
 def test_if_then_computed_assignment_keeps_condition_and_rhs_reads():

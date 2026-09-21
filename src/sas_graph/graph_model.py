@@ -321,15 +321,17 @@ class GraphContext:
             "main_programs": list(self.main_programs),
             "setup_file": self.setup_file,
         }
+        capabilities = [
+            "dataset_lineage", "variable_lineage", "evidence_v1",
+        ]
         if self.derivation_v1:
-            graph["schema"] = {
-                "producer": "sas-graph",
-                "producer_version": SCHEMA_VERSION,
-                "capabilities": [
-                    "dataset_lineage", "variable_lineage", "evidence_v1",
-                    "derivation_v1",
-                ],
-            }
+            capabilities.append("derivation_v1")
+        graph["schema"] = {
+            "producer": "sas-graph",
+            # Producer version currently reuses SCHEMA_VERSION; no distinct runtime version is exposed.
+            "producer_version": SCHEMA_VERSION,
+            "capabilities": capabilities,
+        }
         graph.update({
             "nodes": self.nodes,
             "edges": self.edges,
