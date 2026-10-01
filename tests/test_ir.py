@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from typing import get_args
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
@@ -13,6 +14,10 @@ from sas_graph.ir import (
     IRBinaryOp,
     IRComparison,
     IRComparisonChain,
+    IRCaseExpression,
+    IRExpression,
+    IRFunctionCall,
+    IRInList,
     IRLiteral,
     IRUnknownExpression,
     IRVariableRef,
@@ -50,6 +55,25 @@ def test_iter_variable_refs_walks_comparison_chain_links():
     ]
 
 
+def test_expression_union_includes_case_and_function_call_nodes():
+    assert IRCaseExpression in get_args(IRExpression)
+    assert IRFunctionCall in get_args(IRExpression)
+    assert IRInList in get_args(IRExpression)
+
+
+def test_iter_variable_refs_walks_only_function_call_arguments():
+    call = IRFunctionCall(
+        "upcase",
+        (
+            IRVariableRef("x"),
+            IRLiteral("Y"),
+            IRFunctionCall("strip", (IRVariableRef("y"),)),
+        ),
+    )
+
+    assert [reference.name for reference in iter_variable_refs(call)] == ["x", "y"]
+
+
 def test_unknown_expression_keeps_exact_text_and_span():
     span = SourceSpan("demo.sas", 8, 8, 6, "if a > 1 and b < 2 then x = 1;")
     unknown = IRUnknownExpression("a > 1 and b < 2", span)
@@ -64,6 +88,8 @@ def _run_standalone():
     tests = [
         test_iter_variable_refs_walks_assignment_and_condition,
         test_unknown_expression_keeps_exact_text_and_span,
+        test_expression_union_includes_case_and_function_call_nodes,
+        test_iter_variable_refs_walks_only_function_call_arguments,
     ]
     for test in tests:
         test()

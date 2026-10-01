@@ -20,6 +20,7 @@ from .data_step_ir import (
     parse_condition as _parse_condition_ir,
 )
 from .evidence import EvidenceKind, ResolutionStatus
+from .ir import IRUnknownExpression
 from .macro_state import resolve_text
 
 _SET_RE = re.compile(r"^set\s+(.+?);?$", re.IGNORECASE)
@@ -49,8 +50,11 @@ _RENAME_PAIR_RE = re.compile(
 # (compound AND/OR conditions, IN/LIKE) emits an unknown-expression finding
 # without guessing an edge. Arrays, DO loops, and dynamic variable lists are handled by
 # wayfinder: data-step-keep-drop-rename-variable-edges -- they get a
-# deferred-construct finding instead (see `_emit_variable_edges`).
+# deferred-construct finding instead (see `_emit_variable_edges`). Guarded or plain DO
+# blocks also get a finding because their body has no condition links.
 _DO_HEAD_RE = re.compile(r"^do\b", re.IGNORECASE)
+_DO_BLOCK_RE = re.compile(r"do\s*;?", re.IGNORECASE)
+_GUARDED_BLOCK = "Guarded block"
 _ARRAY_DECL_RE = re.compile(
     r"^array\s+([A-Za-z_]\w*)\s*[\{\[\(]", re.IGNORECASE
 )
@@ -67,11 +71,11 @@ _CALL_RE = re.compile(
 _CALL_HEAD_RE = re.compile(r"^call\b", re.IGNORECASE)
 _SELECT_RE = re.compile(r"^select\s*\(([^()]*)\)\s*;?$", re.IGNORECASE)
 _SELECT_HEAD_RE = re.compile(r"^select\b", re.IGNORECASE)
-_WHEN_RE = re.compile(r"^when\s*\(([^()]*)\)\s+(.+?);?$", re.IGNORECASE)
+_WHEN_HEAD_RE = re.compile(r"^when\s*\(", re.IGNORECASE)
 _OTHERWISE_RE = re.compile(r"^otherwise(?:\s+(.+?))?;?$", re.IGNORECASE)
 _END_RE = re.compile(r"^end\s*;?$", re.IGNORECASE)
 _SUM_RE = re.compile(
-    r"^([A-Za-z_]\w*)\s*\+\s*(.+?[^;])\s*;?$", re.IGNORECASE
+    r"^([A-Za-z_]\w*)\s*\+\s*([^;\s].*?)\s*;?$", re.IGNORECASE
 )
 _SUM_HEAD_RE = re.compile(r"^[A-Za-z_]\w*\s*\+", re.IGNORECASE)
 _TRAILING_OPERATOR_RE = re.compile(r"(?:[+\-*/=<>]|,)\s*$")
@@ -102,7 +106,7 @@ _BARE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$")
 _RHS_IDENTIFIER_RE = re.compile(r"\b([A-Za-z_]\w*)\b(?!\s*[.(])")
 _RHS_EXCLUDED_WORDS = {
     "not", "and", "or", "eq", "ne", "gt", "lt", "ge", "le",
-    "_n_", "_error_", "of",
+    "_n_", "_error_", "of", "_all_",
 }
 _NUMBERED_RANGE_RE = re.compile(
     r"\b([A-Za-z_]\w*?)(\d+)\s*-\s*\1(\d+)\b", re.IGNORECASE
@@ -168,18 +172,70 @@ def _edge_evidence(ctx, source, *endpoint_ids, macro_sources=()):
     )
 
 
+def _split_top_level_whitespace(text):
+    """Split on whitespace outside parentheses and quoted strings."""
+    tokens = []
+    token = []
+    depth = 0
+    quote = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            token.append(char)
+            if char == quote:
+                if index + 1 < len(text) and text[index + 1] == quote:
+                    token.append(text[index + 1])
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+        elif char in "\"'":
+            quote = char
+            token.append(char)
+            index += 1
+        elif char == "(":
+            depth += 1
+            token.append(char)
+            index += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+            token.append(char)
+            index += 1
+        elif char.isspace() and depth == 0:
+            next_index = index
+            while next_index < len(text) and text[next_index].isspace():
+                next_index += 1
+            if token and next_index < len(text) and text[next_index] == "(":
+                index = next_index
+                continue
+            if token:
+                tokens.append("".join(token))
+                token = []
+            index = next_index
+        else:
+            token.append(char)
+            index += 1
+    if token:
+        tokens.append("".join(token))
+    return tokens
+
+
 def _data_targets(opener_text):
     match = _DATA_HEADER_RE.match(opener_text)
     if not match:
         return []
-    return [name for name in match.group(1).split() if name.lower() != "_null_"]
+    return [
+        name for name in _split_top_level_whitespace(match.group(1))
+        if name.lower() != "_null_"
+    ]
 
 
 def _is_null_data(opener_text):
     match = _DATA_HEADER_RE.match(opener_text)
     if not match:
         return False
-    names = match.group(1).split()
+    names = _split_top_level_whitespace(match.group(1))
     return len(names) == 1 and names[0].lower() == "_null_"
 
 
@@ -265,6 +321,11 @@ def _is_prefix(merge_by, sort_by):
     return sort_names[: len(merge_names)] == merge_names
 
 
+# Sentinel `binding` for a DATA _NULL_ step: no output dataset (unlike `None`,
+# which also covers several outputs), so the suggested action can differ.
+_NO_OUTPUT_BINDING = object()
+
+
 def _single_dataset_binding(output_ids):
     """The raw `libref.member` name a DATA step's bare variable references
     bind to, or `None` when there is no single determinable owner (zero or
@@ -283,9 +344,18 @@ def _bind_variable(
     raw_name, binding, statement_order, source, ctx, unresolved_names=(),
     report_finding=True,
 ):
+    """Bind a reference or register an occurrence-specific UnknownVariable.
+
+    Every unqualified DATA-step occurrence gets a mandatory finding except
+    PUT references, which are skipped upstream in `_emit_input_or_put` when
+    unbound (see there).
+    """
     raw_name = raw_name.strip()
     if raw_name.startswith("&"):
         raw_name = raw_name[1:].rstrip(".")
+    no_output_target = binding is _NO_OUTPUT_BINDING
+    if no_output_target:
+        binding = None
     if raw_name.lower() in unresolved_names:
         binding = None
     if binding is not None:
@@ -298,8 +368,13 @@ def _bind_variable(
             "WARNING",
             raw_name,
             f"`{raw_name}` has no single determinable owning dataset for this DATA step.",
-            "Split the step so each output target has unambiguous variable "
-            "references, or confirm the ambiguity is intentional.",
+            (
+                "Identify the input dataset that owns this variable, or confirm "
+                "the unbound reference is intentional."
+                if no_output_target else
+                "Split the step so each output target has unambiguous variable "
+                "references, or confirm the ambiguity is intentional."
+            ),
             source,
             affected_nodes=[node_id],
         )
@@ -511,24 +586,65 @@ def _condition_edges(condition_text, rule, statement, ctx, step_id, binding):
 def _emit_deferred_construct_finding(statement, ctx, step_id, construct):
     """wayfinder: data-step-keep-drop-rename-variable-edges -- arrays, DO
     loops, and dynamic variable lists (`&macrovar.`, numbered ranges) are
-    out of the supported grammar. Each occurrence gets a finding instead of
-    a guessed edge, never a silent drop."""
+    out of the supported grammar. Guarded or plain DO blocks get a finding because their
+    body statements have no condition links."""
     source = statement.as_source("data_step_deferred_variable_construct")
+    message = (
+        "Guarded block: statements inside this do; are not linked to the condition."
+        if construct == _GUARDED_BLOCK
+        else f"{construct} is outside the supported variable-edge grammar; no "
+        "variable edge was inferred for this statement."
+    )
     ctx.add_finding(
         "deferred_variable_construct",
         "NOT_EXECUTED",
         "WARNING",
         statement.original_text.strip(),
-        f"{construct} is outside the supported variable-edge grammar; no "
-        "variable edge was inferred for this statement.",
+        message,
         "Review manually if variable-level lineage through this statement matters.",
         source,
         affected_nodes=[step_id],
     )
 
 
+def _when_parts(text):
+    match = _WHEN_HEAD_RE.match(text)
+    if not match:
+        return None
+
+    depth = 1
+    quote = None
+    index = match.end()
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == quote:
+                if index + 1 < len(text) and text[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = None
+        elif char == "'" or char == '"':
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                condition = text[match.end():index].strip()
+                action = text[index + 1:].strip()
+                if action.endswith(";"):
+                    action = action[:-1].rstrip()
+                return (condition, action) if action else None
+        index += 1
+    return None
+
+
+def _do_construct(text):
+    return _GUARDED_BLOCK if _DO_BLOCK_RE.fullmatch(text.strip()) else "DO loop"
+
+
 def _emit_keep_or_drop(list_text, edge_type, rule, statement, ctx, step_id, binding):
-    tokens = list_text.split()
+    tokens = _split_top_level_whitespace(list_text)
     if not tokens or any(not _BARE_IDENTIFIER_RE.match(token) for token in tokens):
         _emit_deferred_construct_finding(statement, ctx, step_id, "Dynamic variable list")
         return
@@ -670,6 +786,14 @@ def _emit_input_or_put(kind, body, statement, ctx, step_id, binding):
         _emit_deferred_construct_finding(statement, ctx, step_id, "PUT statement")
         return
 
+    # PUT exemption (findings-patch-triage): PUT writes no dataset, so an unbound
+    # PUT reference (no single owning dataset) emits no node, edge or finding.
+    # A single-output step still binds PUT reads to that output, as before.
+    if kind == "put" and (
+        binding is None or binding is _NO_OUTPUT_BINDING
+    ):
+        return
+
     source = statement.as_source(f"data_step_{kind}")
     edge_type = "writes_variable" if kind == "input" else "reads_variable"
     for name in names:
@@ -694,10 +818,11 @@ def _emit_variable_edges(
     """One DATA step's variable edges, in exact statement order (wayfinder:
     data-step-assignment-condition-variable-edges,
     data-step-keep-drop-rename-variable-edges). Arrays, DO loops, and
-    dynamic variable lists never match a supported statement shape, so they
-    get a deferred-construct finding instead of a guessed edge."""
+    dynamic variable lists get deferred-construct findings instead of guessed
+    edges; guarded or plain DO blocks (`do;`) get a finding because their body has no condition links."""
     array_names = set()
     select_active = False
+    select_has_expression = False
     select_do_depth = 0
     for statement in statements:
         text = statement.text.strip()
@@ -717,26 +842,48 @@ def _emit_variable_edges(
         if select_active:
             if _DO_HEAD_RE.match(text):
                 select_do_depth += 1
-                _emit_deferred_construct_finding(statement, ctx, step_id, "DO loop")
+                _emit_deferred_construct_finding(
+                    statement, ctx, step_id, _do_construct(text)
+                )
                 continue
             if _END_RE.match(text):
                 if select_do_depth:
                     select_do_depth -= 1
                     continue
                 select_active = False
+                select_has_expression = False
                 continue
             if select_do_depth:
                 _emit_deferred_construct_finding(statement, ctx, step_id, "SELECT branch")
                 continue
-            when_match = _WHEN_RE.match(text)
-            if when_match:
-                action = when_match.group(2)
+            when_parts = _when_parts(text)
+            if when_parts:
+                condition_text, action = when_parts
                 if _DO_HEAD_RE.match(action.strip()):
                     select_do_depth += 1
-                if _literal_value(when_match.group(1).strip()) is None:
-                    _emit_deferred_construct_finding(statement, ctx, step_id, "SELECT branch")
+                if select_has_expression:
+                    if _literal_value(condition_text) is None:
+                        _emit_deferred_construct_finding(
+                            statement, ctx, step_id, "SELECT branch"
+                        )
+                    else:
+                        _emit_action(
+                            action, statement, ctx, step_id, binding, let_events
+                        )
+                elif _literal_value(condition_text) is not None:
+                    _emit_action(
+                        action, statement, ctx, step_id, binding, let_events
+                    )
                 else:
-                    _emit_action(action, statement, ctx, step_id, binding, let_events)
+                    condition = _condition_edges(
+                        condition_text, "data_step_when_condition", statement,
+                        ctx, step_id, binding,
+                    )
+                    if not isinstance(condition, IRUnknownExpression):
+                        _emit_action(
+                            action, statement, ctx, step_id, binding, let_events,
+                            condition=condition,
+                        )
                 continue
             otherwise_match = _OTHERWISE_RE.match(text)
             if otherwise_match:
@@ -752,7 +899,9 @@ def _emit_variable_edges(
             continue
 
         if _DO_HEAD_RE.match(text):
-            _emit_deferred_construct_finding(statement, ctx, step_id, "DO loop")
+            _emit_deferred_construct_finding(
+                statement, ctx, step_id, _do_construct(text)
+            )
             continue
 
         select_match = _SELECT_RE.match(text)
@@ -771,11 +920,18 @@ def _emit_variable_edges(
                     value=None, operator=None,
                 )
             select_active = True
+            select_has_expression = True
             select_do_depth = 0
             continue
         if _SELECT_HEAD_RE.match(text):
-            _emit_deferred_construct_finding(statement, ctx, step_id, "SELECT statement")
             select_active = True
+            select_has_expression = not re.fullmatch(
+                r"select\s*;?", text, re.IGNORECASE
+            )
+            if select_has_expression:
+                _emit_deferred_construct_finding(
+                    statement, ctx, step_id, "SELECT expression"
+                )
             select_do_depth = 0
             continue
 
@@ -1067,14 +1223,16 @@ def _apply_null_data(block, ctx, let_events):
                     ),
                 )
 
-    if re.search(r"call\s+symputx\s*\(", " ".join(s.text for s in block.statements), re.IGNORECASE):
+    if re.search(r"call\s+symputx?\s*\(", " ".join(s.text for s in block.statements), re.IGNORECASE):
         node["patterns"].append("RUNTIME_MACRO_VARIABLE_CREATION")
         node["usable_for_static_resolution"] = False
 
-    # DATA _NULL_ writes no Dataset, so every variable reference here is
-    # unbound by construction (section _single_dataset_binding's own
-    # zero-output case).
-    _emit_variable_edges(block.statements[1:], ctx, step_id, None, let_events)
+    # DATA _NULL_ writes no Dataset, so references have no output binding.
+    # Keep that context distinct from ambiguous multi-output bindings so the
+    # suggested action can point to the input dataset instead of step splitting.
+    _emit_variable_edges(
+        block.statements[1:], ctx, step_id, _NO_OUTPUT_BINDING, let_events
+    )
 
 
 def _apply_where(block, ctx, step_id):
@@ -1120,8 +1278,8 @@ def _apply_shape_metadata(block, ctx, step_id):
 
     node = next(n for n in ctx.nodes if n["id"] == step_id)
     node.setdefault("patterns", []).append("VARIABLE_SHAPE_CHANGE")
-    node["keep_vars"] = keep.group(1).split() if keep else []
-    node["drop_vars"] = drop.group(1).split() if drop else []
+    node["keep_vars"] = _split_top_level_whitespace(keep.group(1)) if keep else []
+    node["drop_vars"] = _split_top_level_whitespace(drop.group(1)) if drop else []
     node["rename_map"] = (
         dict(_RENAME_PAIR_RE.findall(rename.group(1))) if rename else {}
     )

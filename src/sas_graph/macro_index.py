@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from ._paths import prohibited_reason as _prohibited_reason
+from ._paths import is_sas_file, prohibited_reason as _prohibited_reason
 from .blocks import group_blocks
 from .statements import split_statements
 from .source_snapshot import read_text
@@ -102,7 +102,9 @@ def build_macro_index(macro_roots, source_paths=None):
         root = Path(root).resolve()
         if not root.is_dir():
             continue
-        for path in sorted(root.rglob("*.sas")):
+        for path in sorted(root.rglob("*")):
+            if not is_sas_file(path):
+                continue
             path = path.resolve()
             if path in seen_paths:
                 continue

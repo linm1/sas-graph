@@ -4,6 +4,7 @@ from pathlib import Path
 
 import conftest  # noqa: F401
 
+import sas_graph._paths as paths
 from sas_graph.macro_index import build_macro_index
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -35,6 +36,35 @@ def test_duplicate_macro_definitions_across_files_is_a_conflict(tmp_path):
 
     assert index.has_conflict("dup")
     assert len(index.sites_for("dup")) == 2
+
+
+def test_is_sas_file_matches_case_insensitive_sas_names(tmp_path):
+    for name in ("Foo.SAS", "bar.sas", "baz.sasx", "x.sas.txt", ".sas"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+    (tmp_path / "d.sas").mkdir()
+
+    assert paths.is_sas_file(tmp_path / "Foo.SAS")
+    assert paths.is_sas_file(tmp_path / "bar.sas")
+    assert not paths.is_sas_file(tmp_path / "baz.sasx")
+    assert not paths.is_sas_file(tmp_path / "x.sas.txt")
+    assert not paths.is_sas_file(tmp_path / "d.sas")
+    assert paths.is_sas_file(tmp_path / ".sas")
+
+
+def test_macro_index_scans_sas_extensions_case_insensitively(tmp_path):
+    (tmp_path / "Foo.SAS").write_text(
+        "%macro upper();\n%mend upper;\n", encoding="utf-8"
+    )
+    (tmp_path / "bar.sas").write_text(
+        "%macro lower();\n%mend lower;\n", encoding="utf-8"
+    )
+
+    index = build_macro_index([tmp_path])
+
+    # Windows' case-insensitive glob passes before the fix; the helper test above
+    # is the portable guard.
+    assert index.is_known("upper")
+    assert index.is_known("lower")
 
 
 def test_declared_root_that_does_not_exist_yields_empty_index():

@@ -6,7 +6,7 @@ the DATA-step rules.  It is not a parser AST: unsupported source remains an
 """
 
 from dataclasses import dataclass
-from typing import Iterator, Optional, Tuple, Union
+from typing import Iterator, Optional, Protocol, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -20,9 +20,6 @@ class SourceSpan:
     original_text: str = ""
 
 
-IRSourceSpan = SourceSpan
-
-
 @dataclass(frozen=True)
 class IRVariableRef:
     """A variable name as it appeared in the resolved statement text."""
@@ -30,9 +27,6 @@ class IRVariableRef:
     name: str
     macro_unresolved: bool = False
     source_span: Optional[SourceSpan] = None
-
-
-IRVariableReference = IRVariableRef
 
 
 @dataclass(frozen=True)
@@ -58,8 +52,13 @@ class IRBinaryOp:
     source_span: Optional[SourceSpan] = None
 
 
-IRUnaryExpression = IRUnaryOp
-IRBinaryExpression = IRBinaryOp
+@dataclass(frozen=True)
+class IRFunctionCall:
+    """A function call and its parsed argument expressions."""
+
+    name: str
+    args: Tuple["IRExpression", ...]
+    source_span: Optional[SourceSpan] = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +75,26 @@ class IRComparisonChain:
 
     comparisons: Tuple[IRComparison, ...]
     source_span: Optional[SourceSpan] = None
+
+
+@dataclass(frozen=True)
+class IRInList:
+    """A variable tested against a list of values."""
+
+    left: "IRExpression"
+    members: Tuple["IRExpression", ...]
+    negated: bool = False
+    source_span: Optional[SourceSpan] = None
+
+
+class IRCaseExpression(Protocol):
+    """Structural shape of the SQL IR's case expression node."""
+
+    condition: "IRExpression"
+    then_expression: "IRExpression"
+    else_expression: Optional["IRExpression"]
+    source_span: Optional[SourceSpan]
+    supported: bool
 
 
 @dataclass(frozen=True)
@@ -98,7 +117,12 @@ class IRUnknownExpression:
 class IRAssignment:
     target: IRVariableRef
     value: "IRExpression"
-    condition: Optional[Union[IRComparison, IRComparisonChain]] = None
+    condition: Optional[
+        Union[
+            IRComparison, IRComparisonChain, IRUnaryOp, IRFunctionCall,
+            IRBinaryOp, IRInList,
+        ]
+    ] = None
     source_span: Optional[SourceSpan] = None
 
     @property
@@ -112,8 +136,11 @@ IRExpression = Union[
     IRLiteral,
     IRUnaryOp,
     IRBinaryOp,
+    IRFunctionCall,
     IRComparison,
     IRComparisonChain,
+    IRInList,
+    IRCaseExpression,
     IRUnknownExpression,
 ]
 
@@ -129,13 +156,21 @@ def iter_variable_refs(node) -> Iterator[IRVariableRef]:
         yield from iter_variable_refs(node.target)
         yield from iter_variable_refs(node.value)
         yield from iter_variable_refs(node.condition)
+    elif isinstance(node, IRInList):
+        yield from iter_variable_refs(node.left)
+        for member in node.members:
+            yield from iter_variable_refs(member)
     elif isinstance(node, (IRUnaryOp,)):
         yield from iter_variable_refs(node.operand)
+    elif isinstance(node, IRFunctionCall):
+        for argument in node.args:
+            yield from iter_variable_refs(argument)
     elif isinstance(node, IRComparisonChain):
         for comparison in node.comparisons:
             yield from iter_variable_refs(comparison)
     elif isinstance(node, (IRBinaryOp, IRComparison)):
         yield from iter_variable_refs(node.left)
         yield from iter_variable_refs(node.right)
+    # SQL owns IR case-node traversal, so this helper deliberately skips it.
     elif isinstance(node, IRUnknownExpression):
         yield from node.references

@@ -34,6 +34,18 @@ def test_section_22_fixture_libname_creates_library_node_and_resolves_path():
     assert ctx.libref_map["sdtm"] == "/study/demo/sdtm"
 
 
+def test_work_libref_alias_resolves_to_work():
+    for source in ("libname temp work;\n", "libname Temp WORK;\n"):
+        statements, ctx, events = build(source)
+        statement = statements[0]
+
+        assert rules_libname.is_libname(statement.text)
+        rules_libname.apply(statement, ctx, events)
+
+        assert ctx.libref_map["temp"] == "work"
+        assert not any(node["type"] == "Library" for node in ctx.nodes)
+
+
 def test_libname_with_unresolved_macro_variable_is_flagged():
     statements, ctx, events = build('libname sdtm "&missing./sdtm";\n')
     rules_libname.apply(statements[0], ctx, events)

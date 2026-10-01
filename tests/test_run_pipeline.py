@@ -10,6 +10,7 @@ status, finding statuses) and that both renderers accept the generated graph.
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import conftest  # noqa: F401
 import pytest
@@ -19,7 +20,12 @@ from sas_graph.cli import _run
 from sas_graph.graph_io import load_graph, save_graph
 from sas_graph.renderer_findings import render as render_findings
 from sas_graph.renderer_mermaid import render as render_mermaid
-from sas_graph.run_pipeline import run
+from sas_graph.graph_model import GraphContext
+from sas_graph.run_pipeline import (
+    _called_gm_macro_names,
+    _report_read_but_never_written,
+    run,
+)
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "basic_adae" / "project.yaml"
 
@@ -67,6 +73,17 @@ def _write_multi_program_project(tmp_path, setup_text, programs, extra_config=""
 
 def _macro_names(graph):
     return [node["macro_name"] for node in graph["nodes"] if node["type"] == "MacroCall"]
+
+
+def test_called_gm_macro_names_scans_uppercase_sas_macro_files(tmp_path):
+    macros = tmp_path / "macros"
+    macros.mkdir()
+    (macros / "helper.SAS").write_text("%gmUppercase();\n", encoding="utf-8")
+    config_result = SimpleNamespace(
+        main_programs=(), setup_file=None, macro_roots=(macros,)
+    )
+
+    assert _called_gm_macro_names(config_result) == {"gmUppercase"}
 
 
 def test_utf8_bom_sources_keep_setup_main_include_and_macro_lineage(tmp_path):
@@ -1841,12 +1858,10 @@ def test_qc_adae_macro_wrapped_proc_import_is_reported_not_silent():
 
 
 def test_dataset_read_but_never_written_gets_a_uniform_supported_finding():
-    """Ticket 03: a dataset read but never written by any parsed program gets
-    a uniform, non-degrading finding -- no exception for SDTM raw inputs, no
-    scoping by library name. `sdtm.ae` and `adam.adsl` are two different
-    libraries, both read-only in this fixture, and both must fire the same
-    way. `work.adae_pre` is read (by the PROC SORT) and written (by the DATA
-    step), so it must not fire."""
+    """Read-only non-WORK datasets get uniform, non-degrading findings.
+    `sdtm.ae` and `adam.adsl` are both read-only here and must fire. WORK
+    datasets are suppressed by design; `work.adae_pre` is also written in
+    this fixture."""
     graph = _build_graph()
 
     dangling = {
@@ -1872,6 +1887,71 @@ def test_read_only_dataset_finding_does_not_degrade_an_otherwise_complete_run(tm
         f["type"] == "dataset_read_never_written" and f["object"] == "work.out"
         for f in graph["findings"]
     )
+
+
+def _read_only_dataset_context(dataset_reference, libref_map=None):
+    ctx = GraphContext(main_programs=["main.sas"], setup_file="setup.sas", run_id="r1")
+    if libref_map:
+        ctx.libref_map.update(libref_map)
+    dataset_id = ctx.add_dataset(dataset_reference)
+    ctx.add_edge(
+        "reads_dataset", dataset_id, "step:001",
+        {
+            "file": "main.sas", "line_start": 1, "line_end": 1,
+            "statement_order": 1, "original_text": f"set {dataset_reference};",
+            "rule": "set_statement",
+        },
+    )
+    return ctx
+
+
+@pytest.mark.parametrize("dataset_reference", ["work.x", "x"])
+def test_work_dataset_read_never_written_is_suppressed_by_design(dataset_reference):
+    ctx = _read_only_dataset_context(dataset_reference)
+    _report_read_but_never_written(ctx)
+
+    assert ctx.findings == []
+
+
+def test_work_libref_alias_read_never_written_is_suppressed():
+    ctx = _read_only_dataset_context("temp.x", {"temp": "work"})
+
+    _report_read_but_never_written(ctx)
+
+    assert ctx.findings == []
+
+
+def test_work_libref_alias_suppresses_only_work_read_finding_end_to_end(tmp_path):
+    result = _write_project(
+        tmp_path,
+        "",
+        "libname temp work;\n"
+        "data temp.a;\n"
+        "set temp.x raw.y;\n"
+        "run;\n",
+    )
+
+    graph = run(result, run_id="work-libref-alias-read")
+
+    dangling = [
+        finding for finding in graph["findings"]
+        if finding["type"] == "dataset_read_never_written"
+    ]
+    assert [finding["object"] for finding in dangling] == ["raw.y"]
+    assert not any(
+        node["type"] == "Library" and node["id"] == "library:temp"
+        for node in graph["nodes"]
+    )
+
+
+def test_non_work_read_never_written_finding_is_preserved():
+    ctx = _read_only_dataset_context("raw.x")
+
+    _report_read_but_never_written(ctx)
+
+    assert [(finding["type"], finding["object"]) for finding in ctx.findings] == [
+        ("dataset_read_never_written", "raw.x")
+    ]
 
 
 def test_dangling_read_finding_fires_across_a_merged_multi_program_graph(tmp_path):

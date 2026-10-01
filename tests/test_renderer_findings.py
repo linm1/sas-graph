@@ -1,10 +1,11 @@
 """Findings renderer, exercised against the hand-written contract fixture."""
 
+import tempfile
 from pathlib import Path
 
 import conftest  # noqa: F401  (puts src/ on sys.path)
 
-from sas_graph.graph_io import load_graph
+from sas_graph.graph_io import load_graph, save_graph
 from sas_graph.renderer_findings import STATUS_SECTIONS, render
 
 FIXTURE = Path(__file__).resolve().parents[1] / "examples" / "hand_written_graph.json"
@@ -20,6 +21,17 @@ def test_header_carries_run_status():
 def test_every_section_is_present_in_plan_order():
     out = render(load_graph(FIXTURE))
 
+    assert [status for status, _ in STATUS_SECTIONS] == [
+        "BLOCKED",
+        "REQUIRES_DECISION",
+        "UNRESOLVED_MACRO_VARIABLE",
+        "UNQUALIFIED_VARIABLE",
+        "UNRESOLVED_MACRO_SOURCE",
+        "CONTRACT_INCOMPLETE",
+        "MACRO_CONFLICT",
+        "NOT_EXECUTED",
+        "SUPPORTED",
+    ]
     positions = [out.index(f"## {heading}") for _, heading in STATUS_SECTIONS]
     assert positions == sorted(positions)
 
@@ -60,6 +72,20 @@ def _finding(status, finding_id):
         "message": "status fixture",
         "source": None,
     }
+
+
+def test_unqualified_variable_finding_has_named_section_after_reload():
+    graph = load_graph(FIXTURE)
+    graph["findings"].append(_finding("UNQUALIFIED_VARIABLE", "finding:unqualified"))
+    with tempfile.TemporaryDirectory() as tmp:
+        reloaded = load_graph(save_graph(graph, Path(tmp) / "round_trip.json"))
+
+    out = render(reloaded)
+
+    assert "## UNQUALIFIED_VARIABLE" in out
+    assert "finding:unqualified" in out
+    assert "not a known status" not in out
+    assert "## UNRECOGNISED STATUS" not in out
 
 
 def test_static_condition_supported_is_an_informational_pattern():
@@ -147,6 +173,7 @@ def demo():
     test_empty_sections_say_none_rather_than_vanishing()
     test_unresolved_macro_source_finding_is_reported_with_evidence()
     test_affected_nodes_render_as_labels_not_raw_ids()
+    test_unqualified_variable_finding_has_named_section_after_reload()
     test_static_condition_supported_is_an_informational_pattern()
     test_static_literal_loop_supported_is_an_informational_pattern()
     test_static_list_loop_supported_is_an_informational_pattern()

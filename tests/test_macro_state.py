@@ -44,6 +44,47 @@ def split(text, file_name="t.sas"):
     return split_statements(text, file_name)
 
 
+def test_unresolved_include_path_names_macro_variable():
+    result = split('%include "&_global./x.sas";\n')
+
+    expanded = expand_includes(
+        result.statements,
+        result.comments,
+        allowed_roots=[FIXTURES / "includes"],
+        base_dir=FIXTURES / "includes",
+    )
+
+    finding = next(
+        f for f in expanded.findings if f["type"] == "include_path_unresolved"
+    )
+    assert finding["status"] == "UNRESOLVED_MACRO_VARIABLE"
+    assert "_global" in finding["message"]
+    assert finding["suggested_action"] == (
+        "Use a literal %include path; macro variables in %include paths are "
+        "not resolved yet."
+    )
+    assert not any(
+        f["type"] == "include_file_missing" for f in expanded.findings
+    )
+
+
+def test_unresolved_include_path_without_macro_name_uses_generic_message():
+    result = split('%include "%nrstr(&)";\n')
+
+    expanded = expand_includes(
+        result.statements,
+        result.comments,
+        allowed_roots=[FIXTURES / "includes"],
+        base_dir=FIXTURES / "includes",
+    )
+
+    finding = next(
+        f for f in expanded.findings if f["type"] == "include_path_unresolved"
+    )
+    assert "contains an unresolved macro reference" in finding["message"]
+    assert "macro variable" not in finding["message"]
+
+
 # --- %let resolution, per statement_order -----------------------------------
 
 
@@ -154,11 +195,18 @@ def test_put_statement_produces_no_let_binding():
     assert events == []
 
 
-# --- CALL SYMPUTX / PROC SQL INTO: are evidence only (12.8, 14.7) -----------
+# --- CALL SYMPUT / SYMPUTX / PROC SQL INTO: are evidence only (12.8, 14.7) --
 
 
 def test_call_symputx_does_not_create_a_let_binding():
     result = split("data _null_;\n  call symputx('domain', 'ae');\nrun;\n")
+    events = walk_let_statements(result.statements)
+
+    assert events == []
+
+
+def test_call_symput_does_not_create_a_let_binding():
+    result = split('data _null_;\n  call symput("x", "a");\nrun;\n')
     events = walk_let_statements(result.statements)
 
     assert events == []
@@ -174,6 +222,20 @@ def test_call_symputx_is_flagged_not_usable_for_static_resolution():
         for f in findings
     )
     assert all(f["status"] != "BLOCKED" for f in findings)
+
+
+def test_call_symput_is_flagged_not_usable_for_static_resolution():
+    result = split('data _null_;\n  call symput("x", "a");\nrun;\n')
+    findings = walk_let_statements(result.statements, findings_only=True)
+
+    runtime_findings = [
+        finding for finding in findings
+        if finding["type"] == "runtime_macro_variable_creation"
+    ]
+    assert len(runtime_findings) == 1
+    assert runtime_findings[0]["status"] == "NOT_EXECUTED"
+    assert runtime_findings[0]["severity"] == "INFORMATION"
+    assert runtime_findings[0]["source"]["rule"] == "call_symput"
 
 
 def test_proc_sql_into_does_not_create_a_let_binding():
