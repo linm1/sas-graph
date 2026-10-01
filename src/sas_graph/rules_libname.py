@@ -4,7 +4,7 @@ Captures `libname libref "path";` as a `Library` node, while the XLSX
 engine shape (`libname libref XLSX "path";`) is an `ExternalFile`. Both
 record `ctx.libref_map[libref] = resolved_path` -- section 11.5 forbids
 validating physical dataset existence, so paths are stored for display only,
-never opened.
+never opened. `libname libref work;` records a WORK alias in the same map.
 """
 
 import re
@@ -19,14 +19,24 @@ _LIBNAME_RE = re.compile(
     )\s*;?$""",
     re.IGNORECASE | re.VERBOSE,
 )
+_WORK_ALIAS_RE = re.compile(r"^libname\s+(\w+)\s+work\s*;?$", re.IGNORECASE)
 
 
 def is_libname(statement_text):
-    return _LIBNAME_RE.match(statement_text) is not None
+    return (
+        _LIBNAME_RE.match(statement_text) is not None
+        or _WORK_ALIAS_RE.match(statement_text) is not None
+    )
 
 
 def apply(statement, ctx, let_events):
     """Apply section 11.4 to one `libname` statement. Mutates ctx."""
+    work_alias = _WORK_ALIAS_RE.match(statement.text)
+    if work_alias:
+        libref = work_alias.group(1).lower()
+        ctx.libref_map[libref] = "work"
+        return
+
     match = _LIBNAME_RE.match(statement.text)
     if not match:
         return

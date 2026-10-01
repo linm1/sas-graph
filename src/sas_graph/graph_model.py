@@ -35,10 +35,9 @@ def normalize_dataset(raw, libref_map):
     A bare name (no dot) defaults to `work`, matching SAS's own default
     libref -- section 22's fixture never exercises this, but every DATA/PROC
     output in the dev plan's own examples uses `work.x`, never bare `x`.
-    `libref_map` is consulted for nothing yet (v0 does not resolve a libref to
-    a physical path for graph purposes, section 11.5), but is threaded through
-    so a future rule can flag an undeclared libref without a second lookup
-    mechanism.
+    `libref_map` is ignored here: dataset ids are not rewritten to physical
+    paths (section 11.5). Only the final read-only finding in `run_pipeline`
+    consults it to recognize aliases for `work`.
     """
     if "." in raw:
         libref, member = raw.split(".", 1)
@@ -63,12 +62,11 @@ class GraphContext:
     `run_pipeline.run` resets `sort_by_of`/`sort_by_at` to a setup-only
     snapshot before each program's parse -- structural sort evidence from one
     program's own body must not leak into another's merge-by-prefix check,
-    the same isolation already applied to `%let` state. `libref_map` is the
-    opposite call: it stays one cross-program-shared dict, never reset,
-    because nothing reads it yet (v0 does not resolve a libref to a physical
-    path for graph purposes, section 11.5) -- isolating write-only state that
-    has no observable behavior would be speculative. Revisit when a consumer
-    appears.
+    the same isolation already applied to `%let` state. `libref_map` stays one
+    cross-program-shared dict, never reset, so the final read-only finding can
+    recognize aliases for `work` across all parsed programs; the last LIBNAME
+    for a libref wins. Dataset ids still do not resolve librefs to physical
+    paths (section 11.5).
     """
 
     main_programs: tuple
@@ -84,7 +82,7 @@ class GraphContext:
     _edge_counter: int = 0
     _finding_counter: int = 0
     _inactive_counter: int = 0
-    libref_map: dict = field(default_factory=dict)  # libref -> resolved_path
+    libref_map: dict = field(default_factory=dict)  # libref -> path or WORK alias
     sort_by_of: dict = field(default_factory=dict)  # "libref.member" -> by_vars list
     sort_by_at: dict = field(default_factory=dict)  # dataset id -> [(statement_order, by_vars)]
 

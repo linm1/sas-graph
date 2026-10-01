@@ -15,7 +15,7 @@ the events that precede it in its own file.
 import re
 from pathlib import Path
 
-from ._paths import prohibited_reason as _prohibited_reason
+from ._paths import is_sas_file, prohibited_reason as _prohibited_reason
 from .blocks import group_blocks
 from .graph_model import GraphContext
 from .macro_contracts import load_macro_contracts
@@ -79,7 +79,9 @@ def _called_gm_macro_names(config_result, source_paths=None):
         root = Path(root)
         if not root.is_dir():
             continue
-        for path in sorted(root.rglob("*.sas")):
+        for path in sorted(root.rglob("*")):
+            if not is_sas_file(path):
+                continue
             if _prohibited_reason(path) is not None:
                 continue
             _scan(path)
@@ -406,9 +408,8 @@ def _report_read_but_never_written(ctx):
     no parsed program is expected, correct behavior -- a QC compare target,
     an SDTM raw source, anything of the kind -- not a defect, so it gets a
     plain, non-degrading finding instead of dangling with no explanation for
-    why lineage stops there. Fires uniformly for every such dataset: no
-    scoping by library name or reader count, since guessing which datasets
-    are "supposed to" be external is exactly what this parser must never do.
+    why lineage stops there. WORK datasets are suppressed because they are
+    session-local; non-WORK read-only datasets still get the finding.
     Runs once over the fully merged node/edge set (after every declared
     program has parsed), not per rule module -- it needs the complete
     read/write picture, which no single `rules_*.py` ever has on its own.
@@ -422,13 +423,21 @@ def _report_read_but_never_written(ctx):
     for edge in ctx.edges:
         if edge["type"] == "reads_dataset":
             first_read_edge.setdefault(edge["from"], edge)
-    dataset_labels = {
-        node["id"]: node["label"] for node in ctx.nodes if node["type"] == "Dataset"
+    dataset_nodes = {
+        node["id"]: node for node in ctx.nodes if node["type"] == "Dataset"
     }
     for dataset_node_id, edge in first_read_edge.items():
-        if dataset_node_id in written or dataset_node_id not in dataset_labels:
+        dataset = dataset_nodes.get(dataset_node_id)
+        if dataset_node_id in written or dataset is None:
             continue
-        label = dataset_labels[dataset_node_id]
+        library = dataset["libref"]
+        # libref_map is the shared end-state across programs; the last LIBNAME
+        # for a libref wins.
+        if ctx.libref_map.get(library, library) == "work":
+            # WORK producers may be outside analyzed files; suppress by design,
+            # accepting missed findings when a WORK producer is truly missing.
+            continue
+        label = dataset["label"]
         ctx.add_finding(
             "dataset_read_never_written",
             "SUPPORTED",

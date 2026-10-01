@@ -28,12 +28,13 @@ _LET_RE = re.compile(
     r"^%let\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?);?$", re.IGNORECASE
 )
 _PUT_RE = re.compile(r"^%put\b", re.IGNORECASE)
-_SYMPUTX_RE = re.compile(r"call\s+symputx\s*\(", re.IGNORECASE)
+_SYMPUT_RE = re.compile(r"call\s+(symputx?)\s*\(", re.IGNORECASE)
 _SQL_INTO_RE = re.compile(r"\binto\s*:\s*[A-Za-z_]", re.IGNORECASE)
 # Trailing `/ options` (e.g. `/SOURCE2`) is valid SAS; matched and discarded.
 _INCLUDE_RE = re.compile(
     r'^%include\s+["\']([^"\']+)["\'](?:\s*/\s*\S.*)?\s*;$', re.IGNORECASE
 )
+_INCLUDE_MACRO_RE = re.compile(r"&([A-Za-z_][A-Za-z0-9_]*)")
 
 # A `&name` reference, with an optional single `.` terminator consumed (not
 # kept): section 15.6, `work.&domain._pre` -> `work.ae_pre`. A reference
@@ -127,7 +128,7 @@ def _runtime_creation_finding(kind, statement, message):
 
 
 def _bind_statement(statement, events):
-    """One statement's `%let` / `CALL SYMPUTX` / `PROC SQL INTO:` handling.
+    """One statement's `%let` / `CALL SYMPUT` or `SYMPUTX` / SQL INTO handling.
 
     Shared by `walk_let_statements` and `walk_runtime` so the two never drift
     on this logic. Returns `(event_or_None, finding_or_None)`; `%put` and any
@@ -147,11 +148,13 @@ def _bind_statement(statement, events):
         )
         return event, None
 
-    if _SYMPUTX_RE.search(text):
+    match = _SYMPUT_RE.search(text)
+    if match:
+        routine = match.group(1).lower()
         return None, _runtime_creation_finding(
-            "call_symputx",
+            f"call_{routine}",
             statement,
-            "`CALL SYMPUTX` creates a macro variable at SAS runtime.",
+            f"`CALL {routine.upper()}` creates a macro variable at SAS runtime.",
         )
 
     if _SQL_INTO_RE.search(text):
@@ -168,9 +171,9 @@ def walk_let_statements(statements, findings_only=False, initial_events=()):
     """Walk `statements` in order, collecting `%let` bindings (section 11.3).
 
     `%put` is ignored entirely (section 11.7): no binding, no finding, not even
-    for an undefined reference. `CALL SYMPUTX` and `PROC SQL INTO:` are
-    recorded as evidence only (12.8, 14.7): no binding is created, and a prior
-    `%let` for a different name keeps resolving normally afterward.
+    for an undefined reference. `CALL SYMPUT` / `CALL SYMPUTX` and `PROC SQL
+    INTO:` are recorded as evidence only (12.8, 14.7): no binding is created,
+    and a prior `%let` for a different name keeps resolving normally afterward.
 
     Returns the `LetEvent` list, or the findings list when `findings_only`.
     """
@@ -500,7 +503,7 @@ def walk_runtime(statements, initial_events=(), os_fvars_base=None):
     return surviving, events, findings, skipped_orders
 
 
-def _include_finding(kind, statement, message, raw_path):
+def _include_finding(kind, statement, message, raw_path, status="NOT_EXECUTED"):
     """Build a finding tagged to `statement`, deferring `source`/`id` to
     `_renumber_pieces`: at this point `statement.statement_order` is still the
     pre-splice, per-file number, and section 7 requires the finding to point
@@ -509,16 +512,18 @@ def _include_finding(kind, statement, message, raw_path):
     return {
         "_pending_statement": statement,
         "_pending_rule": kind,
-        # Section 5.3 does not list a rejected %include among the FAILED
-        # conditions, and the statements around it are still true, so this is
-        # NOT_EXECUTED (section 6): the include did not run, nothing else broke.
-        "status": "NOT_EXECUTED",
+        # A rejected %include is NOT_EXECUTED (section 6), unless its raw path
+        # still contains a macro reference that this pass cannot resolve.
+        "status": status,
         "type": kind,
         "severity": "WARNING",
         "object": statement.file,
         "message": message,
         "suggested_action": (
-            f'Fix `%include "{raw_path}"`, or add its directory to allowed_roots.'
+            "Use a literal %include path; macro variables in %include paths are "
+            "not resolved yet."
+            if status == "UNRESOLVED_MACRO_VARIABLE"
+            else f'Fix `%include "{raw_path}"`, or add its directory to allowed_roots.'
         ),
         "affected_nodes": [],
         "affected_edges": [],
@@ -635,6 +640,29 @@ def _build_pieces(statements, comments, roots, base_dir, visited, source_paths):
             continue
 
         raw_path = include_match.group(1)
+        if "&" in raw_path:
+            macro_match = _INCLUDE_MACRO_RE.search(raw_path)
+            message = (
+                f'`%include "{raw_path}"` contains unresolved macro variable '
+                f"`{macro_match.group(1)}`."
+                if macro_match
+                else f'`%include "{raw_path}"` contains an unresolved macro reference.'
+            )
+            pieces.append(
+                _Piece(
+                    "finding",
+                    _include_finding(
+                        "include_path_unresolved",
+                        statement,
+                        message,
+                        raw_path,
+                        status="UNRESOLVED_MACRO_VARIABLE",
+                    ),
+                )
+            )
+            pieces.append(piece)
+            continue
+
         candidate = Path(raw_path)
         resolved = (
             candidate if candidate.is_absolute() else base_dir / candidate

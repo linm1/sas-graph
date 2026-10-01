@@ -30,6 +30,10 @@ PROHIBITED_SEGMENTS = {
 }
 
 
+def is_sas_file(path):
+    return path.name.lower().endswith(".sas") and path.is_file()
+
+
 def prohibited_reason(path):
     """Return why section 2 forbids this path, or None."""
     path = Path(path)

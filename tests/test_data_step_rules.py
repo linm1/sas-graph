@@ -172,6 +172,81 @@ def test_multi_output_data_step_creates_writes_for_all_targets():
     assert all(f["type"] != "multi_output_ambiguous" for f in ctx.findings)
 
 
+def test_data_target_options_do_not_create_fake_output_targets():
+    blocks, ctx, events = build(
+        'data rawlib.out(keep=A B drop=C D rename=(a=b c=d) '
+        'where=(x="A B" and nested=(fn(y="( )"))));\n'
+        "  output;\n"
+        "run;\n",
+        "synthetic.sas",
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    step = next(node for node in ctx.nodes if node["type"] == "Step")
+    writes = {edge["to"] for edge in ctx.edges if edge["type"] == "writes_dataset"}
+    assert writes == {"dataset:rawlib.out"}
+    assert not any(finding["type"] == "AMBIGUOUS_OUTPUT_TARGET" for finding in ctx.findings)
+    assert "MULTI_OUTPUT_DATA_STEP" not in step["patterns"]
+    assert "MULTI_OUTPUT_AMBIGUOUS" not in step["patterns"]
+
+
+def test_data_target_options_preserve_genuine_multiple_outputs():
+    blocks, ctx, events = build(
+        "data rawlib.a(keep=x y) rawlib.b;\n  output;\nrun;\n",
+        "synthetic.sas",
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    step = next(node for node in ctx.nodes if node["type"] == "Step")
+    writes = {edge["to"] for edge in ctx.edges if edge["type"] == "writes_dataset"}
+    assert writes == {"dataset:rawlib.a", "dataset:rawlib.b"}
+    assert "MULTI_OUTPUT_DATA_STEP" in step["patterns"]
+    assert "MULTI_OUTPUT_AMBIGUOUS" in step["patterns"]
+    assert any(finding["type"] == "AMBIGUOUS_OUTPUT_TARGET" for finding in ctx.findings)
+
+
+def test_data_target_options_with_space_before_paren_stay_single_output():
+    blocks, ctx, events = build(
+        "data rawlib.out (keep=a b);\n  output;\nrun;\n",
+        "synthetic.sas",
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    step = next(node for node in ctx.nodes if node["type"] == "Step")
+    writes = {edge["to"] for edge in ctx.edges if edge["type"] == "writes_dataset"}
+    assert writes == {"dataset:rawlib.out"}
+    assert not any(finding["type"] == "AMBIGUOUS_OUTPUT_TARGET" for finding in ctx.findings)
+    assert "MULTI_OUTPUT_DATA_STEP" not in step["patterns"]
+
+
+def test_split_top_level_whitespace_handles_nesting_quotes_and_incomplete_input():
+    split = rules_data_step._split_top_level_whitespace
+    assert split('a(where=(x=fn("b c"))) d') == ['a(where=(x=fn("b c")))', "d"]
+    assert split('a(where=(x="say ""hi there""")) b') == [
+        'a(where=(x="say ""hi there"""))',
+        "b",
+    ]
+    assert split("a b(where=(x='y'") == ["a", "b(where=(x='y'"]
+    assert split("") == []
+
+
+def test_plain_keep_drop_rename_shape_metadata_is_preserved():
+    blocks, ctx, events = build(
+        "data rawlib.out;\n"
+        "  keep a b c;\n"
+        "  drop d;\n"
+        "  rename e=f;\n"
+        "run;\n",
+        "synthetic.sas",
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    step = next(node for node in ctx.nodes if node["type"] == "Step")
+    assert step["keep_vars"] == ["a", "b", "c"]
+    assert step["drop_vars"] == ["d"]
+    assert step["rename_map"] == {"e": "f"}
+
+
 def test_unnamed_output_in_multi_output_step_is_ambiguous():
     """Section 12.7's own example."""
     blocks, ctx, events = build(
@@ -251,6 +326,17 @@ def test_data_null_creates_step_with_no_output_dataset():
     assert all(e["type"] != "depends_on" for e in ctx.edges)
     step = next(n for n in ctx.nodes if n["type"] == "Step")
     assert "DATA_NULL_STEP" in step["patterns"]
+    assert "RUNTIME_MACRO_VARIABLE_CREATION" in step["patterns"]
+    assert step["usable_for_static_resolution"] is False
+
+
+def test_data_null_call_symput_marks_runtime_macro_creation():
+    blocks, ctx, events = build(
+        "data _null_;\n  call symput('n', 1);\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    step = next(node for node in ctx.nodes if node["type"] == "Step")
     assert "RUNTIME_MACRO_VARIABLE_CREATION" in step["patterns"]
     assert step["usable_for_static_resolution"] is False
 
@@ -486,6 +572,10 @@ def test_format_and_informat_names_are_not_read_as_variables():
         for n in ctx.nodes
         if n["type"] in ("Variable", "UnknownVariable")
     )
+    assert [
+        finding["object"] for finding in ctx.findings
+        if finding["type"] == "unknown_expression"
+    ] == ["input(y, best32.)", "put(y, yymmdd10.)"]
 
 
 def test_literal_suffixes_and_special_missing_are_not_read_as_variables():
@@ -670,6 +760,37 @@ def test_if_compat_greater_equal_spelling_maps_to_canonical_operator():
         ("variable:work.a.y", "Y", None, "data_step_assignment"),
     }
     assert ctx.findings == []
+
+
+def test_if_not_precedence_preserves_direct_comparison_metadata():
+    cases = (
+        ("not a = 1", {"a": (None, None)}),
+        ("not (a = 1)", {"a": ("1", "=")}),
+        ("not a = 1 and b = 2", {"a": (None, None), "b": ("2", "=")}),
+        ("not missing(x) and y = 1", {"x": (None, None), "y": ("1", "=")}),
+    )
+    for condition, expected in cases:
+        blocks, ctx, events = build(chr(10).join((
+            "data work.a;",
+            "  set sdtm.ae;",
+            f"  if {condition} then flag = 1;",
+            "run;",
+        )))
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        reads = {
+            edge["from"].rsplit(".", 1)[-1]: (
+                edge["value"], edge["operator"],
+            )
+            for edge in ctx.edges
+            if edge["type"] == "reads_variable"
+            and edge["source"]["rule"] == "data_step_if_condition"
+        }
+        assert reads == expected, condition
+        assert not any(
+            finding["type"] == "unknown_expression"
+            for finding in ctx.findings
+        ), condition
 
 
 def test_if_compat_less_equal_spelling_maps_to_canonical_operator():
@@ -914,38 +1035,56 @@ def test_standalone_else_assignment_emits_the_same_assignment_edges():
     assert ctx.findings == []
 
 
-def test_if_and_else_unsupported_actions_keep_deferred_behavior():
+def test_if_and_else_do_blocks_emit_body_edges_and_guarded_block_findings():
     blocks, ctx, events = build(
         "data work.a;\n"
         "  set sdtm.ae;\n"
-        "  if condition = 'Y' then do;\n"
+        "  if c then do;\n"
+        "    x = y;\n"
+        "    do i = 1 to 3;\n"
+        "      z = w;\n"
+        "    end;\n"
         "  end;\n"
         "  else do;\n"
+        "    a = b;\n"
+        "  end;\n"
+        "  else if d then do;\n"
+        "    p = q;\n"
         "  end;\n"
         "run;\n"
     )
     rules_data_step.apply(blocks[0], ctx, events)
 
     reads = {
-        (e["from"], e["value"], e["operator"], e["source"]["rule"])
+        e["from"]
         for e in ctx.edges if e["type"] == "reads_variable"
     }
     writes = {
-        (e["to"], e["value"], e["operator"], e["source"]["rule"])
+        e["to"]
         for e in ctx.edges if e["type"] == "writes_variable"
     }
     findings = [
-        (finding["type"], finding["status"], finding["source"]["rule"])
-        for finding in ctx.findings
+        finding for finding in ctx.findings
+        if finding["type"] == "deferred_variable_construct"
     ]
     assert reads == {
-        ("variable:work.a.condition", "Y", "=", "data_step_if_condition"),
+        "variable:work.a.y",
+        "variable:work.a.w",
+        "variable:work.a.b",
+        "variable:work.a.q",
     }
-    assert writes == set()
-    assert findings == [
-        ("deferred_variable_construct", "NOT_EXECUTED", "data_step_deferred_variable_construct"),
-        ("deferred_variable_construct", "NOT_EXECUTED", "data_step_deferred_variable_construct"),
+    assert writes == {
+        "variable:work.a.x",
+        "variable:work.a.z",
+        "variable:work.a.a",
+        "variable:work.a.p",
+    }
+    assert [finding["status"] for finding in findings] == [
+        "NOT_EXECUTED", "NOT_EXECUTED", "NOT_EXECUTED", "NOT_EXECUTED",
     ]
+    assert sum("Guarded block" in finding["message"] for finding in findings) == 3
+    assert sum("DO loop" in finding["message"] for finding in findings) == 1
+    assert not any(edge["type"] == "conditioned_by" for edge in ctx.edges)
 
 
 def test_call_missing_writes_one_variable_with_null_value_and_operator():
@@ -1137,7 +1276,7 @@ def test_select_do_branch_does_not_drop_later_when_or_otherwise_actions():
         for e in ctx.edges if e["type"] == "writes_variable"
     }
     findings = {
-        (f["type"], f["status"], f["object"], f["source"]["rule"])
+        (f["type"], f["status"], f["object"], f["source"]["rule"], f["message"])
         for f in ctx.findings
     }
     assert reads == {
@@ -1153,18 +1292,21 @@ def test_select_do_branch_does_not_drop_later_when_or_otherwise_actions():
             "NOT_EXECUTED",
             "when ('Y') do;",
             "data_step_deferred_variable_construct",
+            "Guarded block: statements inside this do; are not linked to the condition.",
         ),
         (
             "deferred_variable_construct",
             "NOT_EXECUTED",
             "x=1;",
             "data_step_deferred_variable_construct",
+            "SELECT branch is outside the supported variable-edge grammar; no variable edge was inferred for this statement.",
         ),
         (
             "deferred_variable_construct",
             "NOT_EXECUTED",
             "y=2;",
             "data_step_deferred_variable_construct",
+            "SELECT branch is outside the supported variable-edge grammar; no variable edge was inferred for this statement.",
         ),
     }
 
@@ -1265,6 +1407,38 @@ def test_unsupported_call_argument_shape_defers_without_variable_edges():
     }
 
 
+def test_call_symput_function_value_matches_symputx_findings():
+    """Macro-state owns the runtime finding; DATA emits none for this shape."""
+    findings_by_routine = {}
+    for routine in ("symput", "symputx"):
+        source = f'data work.a;\n  call {routine}("x", repeat("a", 3));\nrun;\n'
+        blocks, ctx, events = build(source)
+        statements = split_statements(source, "adae.sas").statements
+        macro_findings = walk_let_statements(statements, findings_only=True)
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        runtime_findings = [
+            finding for finding in macro_findings
+            if finding["type"] == "runtime_macro_variable_creation"
+        ]
+        assert len(runtime_findings) == 1
+        assert runtime_findings[0]["source"]["rule"] == f"call_{routine}"
+        assert runtime_findings[0]["status"] == "NOT_EXECUTED"
+        assert runtime_findings[0]["severity"] == "INFORMATION"
+        assert ctx.findings == []
+        findings_by_routine[routine] = {
+            (
+                finding["type"], finding["status"], finding["severity"],
+                finding["object"],
+                finding["message"].replace(routine.upper(), "<routine>"),
+                finding["source"]["rule"].replace(routine, "<routine>"),
+            )
+            for finding in [*macro_findings, *ctx.findings]
+        }
+
+    assert findings_by_routine["symput"] == findings_by_routine["symputx"]
+
+
 def test_sum_statement_reads_accumulator_and_rhs_and_writes_accumulator():
     blocks, ctx, events = build(
         "data work.a;\n"
@@ -1292,11 +1466,41 @@ def test_sum_statement_reads_accumulator_and_rhs_and_writes_accumulator():
     assert ctx.findings == []
 
 
+def test_sum_statement_accepts_single_character_rhs():
+    for statement, accumulator, rhs_variables in (
+        ("n+1;", "n", set()),
+        ("n+10;", "n", set()),
+        ("t+x;", "t", {"x"}),
+        ("total+amt*2;", "total", {"amt"}),
+    ):
+        blocks, ctx, events = build(
+            "data work.a;\n"
+            "  set sdtm.ae;\n"
+            f"  {statement}\n"
+            "run;\n"
+        )
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        reads = {
+            e["from"] for e in ctx.edges if e["type"] == "reads_variable"
+        }
+        writes = {
+            e["to"] for e in ctx.edges if e["type"] == "writes_variable"
+        }
+        assert reads == {
+            f"variable:work.a.{accumulator}",
+            *(f"variable:work.a.{name}" for name in rhs_variables),
+        }
+        assert writes == {f"variable:work.a.{accumulator}"}
+        assert ctx.findings == []
+
+
 def test_malformed_sum_statement_defers_without_variable_edges():
     blocks, ctx, events = build(
         "data work.a;\n"
         "  set sdtm.ae;\n"
         "  total + amount +;\n"
+        "  n+;\n"
         "run;\n"
     )
     rules_data_step.apply(blocks[0], ctx, events)
@@ -1320,6 +1524,12 @@ def test_malformed_sum_statement_defers_without_variable_edges():
             "deferred_variable_construct",
             "NOT_EXECUTED",
             "total + amount +;",
+            "data_step_deferred_variable_construct",
+        ),
+        (
+            "deferred_variable_construct",
+            "NOT_EXECUTED",
+            "n+;",
             "data_step_deferred_variable_construct",
         ),
     }
@@ -1420,29 +1630,696 @@ def test_unsupported_input_put_lists_defer_without_variable_edges():
     }
 
 
-def test_if_compound_or_condition_declines_without_garbled_literal():
+def test_select_without_selector_emits_when_condition_reads():
     blocks, ctx, events = build(
-        'data adam.adlb;\n  set sdtm.lb;\n'
-        '  if aesdth = "Y" or upcase(strip(aeout)) = "FATAL" then aedthfl = "Y";\n'
-        'run;\n'
+        "data work.a;\n  set sdtm.ae;\n  select;\n"
+        "    when (upcase(x) = 'A') y = z;\n"
+        "  end;\nrun;\n"
     )
     rules_data_step.apply(blocks[0], ctx, events)
 
-    assert not any(e["type"] == "reads_variable" for e in ctx.edges)
+    reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable"]
+    assert {edge["from"] for edge in reads} == {
+        "variable:work.a.x",
+        "variable:work.a.z",
+    }
+    condition_edges = [
+        edge for edge in ctx.edges if edge["type"] == "conditioned_by"
+    ]
+    assert {edge["from"] for edge in condition_edges} == {"variable:work.a.x"}
+    assert {edge["condition_text"] for edge in condition_edges} == {
+        "upcase(x) = 'A'",
+    }
+    assert ctx.findings == []
+
+
+def test_select_when_actions_parse_balanced_parentheses():
+    cases = (
+        ("(a + b) * 2", {"a", "b"}),
+        ("sum(a, b) + 1", {"a", "b"}),
+        ("round(a, 1) * 2", {"a"}),
+    )
+    for expression, action_reads in cases:
+        for selector in (True, False):
+            select_text = "select (x);" if selector else "select;"
+            when_condition = "1" if selector else "gate > 1"
+            expected_reads = action_reads | ({"x"} if selector else {"gate"})
+            blocks, ctx, events = build(
+                "data work.a;\n  set sdtm.ae;\n  "
+                f"{select_text}\n  when ({when_condition}) y = {expression};\n"
+                "  end;\nrun;\n"
+            )
+            rules_data_step.apply(blocks[0], ctx, events)
+
+            assert {
+                edge["from"].rsplit(".", 1)[-1]
+                for edge in ctx.edges if edge["type"] == "reads_variable"
+            } == expected_reads, (selector, expression)
+            assert {
+                edge["to"] for edge in ctx.edges
+                if edge["type"] == "writes_variable"
+            } == {"variable:work.a.y"}, (selector, expression)
+            assert not any(
+                finding["type"] in {
+                    "unknown_expression", "deferred_variable_construct",
+                }
+                for finding in ctx.findings
+            ), (selector, expression)
+
+
+def test_select_with_unparsed_selector_keeps_selector_findings_and_semantics():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n"
+        "  select (upcase(x));\n"
+        "    when ('A') y = 1;\n"
+        "    otherwise y = 0;\n"
+        "  end;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert not any(edge["type"] == "reads_variable" for edge in ctx.edges)
+    assert {
+        edge["to"] for edge in ctx.edges if edge["type"] == "writes_variable"
+    } == {"variable:work.a.y"}
+    assert [
+        (finding["type"], finding["object"])
+        for finding in ctx.findings
+        if finding["type"] == "deferred_variable_construct"
+    ] == [("deferred_variable_construct", "select (upcase(x));")]
+
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n"
+        "  select (upcase(x));\n"
+        "    when (missing(w)) y = 1;\n"
+        "  end;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
     assert not any(
-        e.get("value") == 'Y" or upcase(strip(aeout)) = "FATAL"'
-        for e in ctx.edges
+        edge["type"] in {"reads_variable", "writes_variable", "conditioned_by"}
+        for edge in ctx.edges
     )
     assert [
         (finding["type"], finding["object"])
         for finding in ctx.findings
+        if finding["type"] == "deferred_variable_construct"
     ] == [
-        ("unknown_expression", 'aesdth = "Y" or upcase(strip(aeout)) = "FATAL"')
+        ("deferred_variable_construct", "select (upcase(x));"),
+        ("deferred_variable_construct", "when (missing(w)) y = 1;"),
     ]
-    assert not any(edge["type"] == "conditioned_by" for edge in ctx.edges)
 
 
-def test_if_three_way_or_condition_declines_without_garbled_literal():
+def test_selectorless_when_condition_with_quoted_paren_keeps_action():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n  select;\n"
+        "    when (x = ')') y = 1;\n"
+        "  end;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable"]
+    assert [(e["from"], e.get("value")) for e in reads] == [
+        ("variable:work.a.x", ")"),
+    ]
+    assert [e["to"] for e in ctx.edges if e["type"] == "writes_variable"] == [
+        "variable:work.a.y",
+    ]
+    assert ctx.findings == []
+
+
+def test_selectorless_when_literal_condition_keeps_action_reads_and_writes():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n  select;\n"
+        "    when (1) y = a;\n"
+        "  end;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert {e["from"] for e in ctx.edges if e["type"] == "reads_variable"} == {
+        "variable:work.a.a",
+    }
+    assert [e["to"] for e in ctx.edges if e["type"] == "writes_variable"] == [
+        "variable:work.a.y",
+    ]
+    assert not any(f["type"] == "unknown_expression" for f in ctx.findings)
+
+
+def test_selectorless_select_when_closing_paren_literal_keeps_condition_reads():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n  select;\n"
+        "    when (x = ')') y = 1;\n  end;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable"]
+    assert [(edge["from"], edge["value"], edge["operator"]) for edge in reads] == [
+        ("variable:work.a.x", ")", "="),
+    ]
+    assert [(edge["to"], edge["value"]) for edge in ctx.edges if edge["type"] == "writes_variable"] == [
+        ("variable:work.a.y", "1"),
+    ]
+    assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings)
+
+
+def test_selectorless_select_when_literal_condition_reads_action_rhs():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n  select;\n"
+        "    when (1) y = a;\n  end;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert [edge["from"] for edge in ctx.edges if edge["type"] == "reads_variable"] == [
+        "variable:work.a.a",
+    ]
+    assert [(edge["to"], edge["value"]) for edge in ctx.edges if edge["type"] == "writes_variable"] == [
+        ("variable:work.a.y", None),
+    ]
+    assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings)
+
+
+def test_select_unsupported_when_condition_emits_no_branch_edges():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n  select;\n"
+        "    when ('Y', 'N') y = z;\n"
+        "  end;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert not any(
+        edge["type"] in {"reads_variable", "writes_variable"}
+        for edge in ctx.edges
+    )
+    assert [
+        (finding["type"], finding["object"])
+        for finding in ctx.findings
+        if finding["type"] == "unknown_expression"
+    ] == [("unknown_expression", "'Y', 'N'")]
+
+
+def test_if_not_missing_condition_emits_reads_and_condition_edges():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n"
+        "  if not missing(x) then y = z;\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable"]
+    assert {edge["from"] for edge in reads} == {
+        "variable:work.a.x",
+        "variable:work.a.z",
+    }
+    condition_edges = [
+        edge for edge in ctx.edges if edge["type"] == "conditioned_by"
+    ]
+    assert {edge["from"] for edge in condition_edges} == {"variable:work.a.x"}
+    assert {edge["condition_text"] for edge in condition_edges} == {
+        "not missing(x)",
+    }
+    assert not any(
+        finding["type"] == "unknown_expression" for finding in ctx.findings
+    )
+
+
+def test_if_pure_function_condition_emits_reads_and_condition_edges():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n"
+        "  if upcase(x) = 'A' then y = z;\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable"]
+    assert {edge["from"] for edge in reads} == {
+        "variable:work.a.x",
+        "variable:work.a.z",
+    }
+    condition_edges = [
+        edge for edge in ctx.edges if edge["type"] == "conditioned_by"
+    ]
+    assert {edge["from"] for edge in condition_edges} == {"variable:work.a.x"}
+    assert {edge["condition_text"] for edge in condition_edges} == {
+        "upcase(x) = 'A'",
+    }
+    assert not any(
+        finding["type"] == "unknown_expression" for finding in ctx.findings
+    )
+
+
+def test_condition_reads_only_carry_literal_facts_for_plain_variables():
+    cases = (
+        ("year(d) = 2020", {"d"}, None, None),
+        ("substr(x, 1, 2) = 'AB'", {"x"}, None, None),
+        ("length(x) > 1", {"x"}, None, None),
+        ("sum(a, b) > 3", {"a", "b"}, None, None),
+        ("x > 1", {"x"}, "1", ">"),
+    )
+    for condition, expected_reads, expected_value, expected_operator in cases:
+        blocks, ctx, events = build(
+            "data work.a;\n  set sdtm.ae;\n"
+            f"  if {condition} then y = 1;\nrun;\n"
+        )
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable"]
+        assert {
+            edge["from"].rsplit(".", 1)[-1] for edge in reads
+        } == expected_reads, condition
+        assert all(
+            edge["value"] == expected_value
+            and edge["operator"] == expected_operator
+            for edge in reads
+        ), condition
+        assert not any(
+            finding["type"] == "unknown_expression" for finding in ctx.findings
+        ), condition
+
+
+def test_boolean_and_in_conditions_emit_reads_for_if_and_where():
+    cases = (
+        ("a > 1 and b < 2", {"a": ("1", ">"), "b": ("2", "<")}),
+        ("a > 1 or b < 2", {"a": ("1", ">"), "b": ("2", "<")}),
+        ("(a > 1 and b < 2) or c > 3", {
+            "a": ("1", ">"), "b": ("2", "<"), "c": ("3", ">"),
+        }),
+        ("x in (1, 2)", {"x": (None, None)}),
+        ("x not in ('A', 'B')", {"x": (None, None)}),
+        ("x NOT IN ('A', 'B')", {"x": (None, None)}),
+        ("x Not In ('A', 'B')", {"x": (None, None)}),
+        ("x = 1 or y NOT IN ('A')", {"x": ("1", "="), "y": (None, None)}),
+        ("x in (a, b)", {"x": (None, None), "a": (None, None), "b": (None, None)}),
+        ("x in (upcase(a), b)", {"x": (None, None), "a": (None, None), "b": (None, None)}),
+        ("not (x in (1, 2))", {"x": (None, None)}),
+        ("a > 1 AND b < 2", {"a": ("1", ">"), "b": ("2", "<")}),
+    )
+    nl = chr(10)
+    for condition, expected in cases:
+        for statement_kind in ("if", "where"):
+            statement = (
+                f"if {condition} then target = 'Y';"
+                if statement_kind == "if"
+                else f"where {condition};"
+            )
+            program = "data work.a;" + nl + "  set sdtm.ae;" + nl + "  " + statement + nl + "run;" + nl
+            blocks, ctx, events = build(program)
+            rules_data_step.apply(blocks[0], ctx, events)
+
+            reads = [
+                edge for edge in ctx.edges
+                if edge["type"] == "reads_variable"
+                and edge["source"]["rule"] == f"data_step_{statement_kind}_condition"
+            ]
+            assert {
+                edge["from"].rsplit(".", 1)[-1]: (edge["value"], edge["operator"])
+                for edge in reads
+            } == expected, (statement_kind, condition)
+            if statement_kind == "if":
+                conditioned = [edge for edge in ctx.edges if edge["type"] == "conditioned_by"]
+                assert {edge["from"].rsplit(".", 1)[-1] for edge in conditioned} == set(expected)
+            assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings), (statement_kind, condition)
+
+
+def test_assignment_rhs_boolean_and_in_lists_emit_variable_reads():
+    nl = chr(10)
+    program = "data work.a;" + nl + "  set sdtm.ae;" + nl + "  y = a > 1 and b < 2;" + nl + "  z = x in (1, 2);" + nl + "  q = x not in ('A', 'B');" + nl + "  w = x in (a, b);" + nl + "  v = x NOT IN (1, 2);" + nl + "run;" + nl
+    blocks, ctx, events = build(program)
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable"]
+    assert {edge["from"].rsplit(".", 1)[-1] for edge in reads} == {"a", "b", "x"}
+    assert all(edge["value"] is None and edge["operator"] is None for edge in reads)
+    assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings)
+
+
+def test_unsupported_in_lists_on_assignment_rhs_keep_baseline_unknown_reads():
+    for expression in (
+        "x in (&mv)", "x in (1:5)", "x in ()", "x in (lag(x))",
+        "x in (1,", "x in (1, 2", "x in y",
+    ):
+        nl = chr(10)
+        program = "data work.a;" + nl + "  set sdtm.ae;" + nl + f"  y = {expression};" + nl + "run;" + nl
+        blocks, ctx, events = build(program)
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        actual = {
+            edge["from"].rsplit(".", 1)[-1].split(":")[-1].split("@")[0].lstrip("&")
+            for edge in ctx.edges if edge["type"] == "reads_variable"
+        }
+        assert actual == set(rules_data_step._rhs_identifiers(expression)), expression
+        assert [
+            (finding["type"], finding["object"])
+            for finding in ctx.findings
+            if finding["type"] == "unknown_expression"
+        ] == [("unknown_expression", expression)], expression
+
+
+def test_unsupported_boolean_assignment_rhs_keeps_baseline_unknown_reads():
+    for expression in (
+        "a > 1 and b", "x = a or b", "first.x and z > 1",
+        "last.x and z > 1",
+    ):
+        nl = chr(10)
+        program = "data work.a;" + nl + "  set sdtm.ae;" + nl + f"  y = {expression};" + nl + "run;" + nl
+        blocks, ctx, events = build(program)
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        actual = {
+            edge["from"].rsplit(".", 1)[-1].split(":")[-1].split("@")[0].lstrip("&")
+            for edge in ctx.edges if edge["type"] == "reads_variable"
+        }
+        assert actual == set(rules_data_step._rhs_identifiers(expression)), expression
+        assert [
+            (finding["type"], finding["object"])
+            for finding in ctx.findings
+            if finding["type"] == "unknown_expression"
+        ] == [("unknown_expression", expression)], expression
+
+
+def test_assignment_rhs_boolean_and_in_lists_keep_unknown_baseline_reads():
+    cases = (
+        ("first.id and last.id", {"id"}),
+        ("first.id or a", {"id", "a"}),
+        ("a and of", {"a"}),
+        ("a and _all_", {"a"}),
+        ("a and &mv", {"a", "mv"}),
+        ("(a > &mv) and b", {"a", "mv", "b"}),
+        ("a & b", {"a", "b"}),
+        ("a | b", {"a", "b"}),
+        ("x in (lag(y))", {"x", "y"}),
+        ("x in (a+1)", {"x", "a"}),
+        ("a + b in (1)", {"a", "b"}),
+        ("a > &mv and b < 2", {"a", "mv", "b"}),
+        ("first.id > 1 and b < 2", {"id", "b"}),
+        ("first.id = 1 or last.id = 1", {"id"}),
+        ("a > 1 and b < of", {"a", "b"}),
+        ("a > 1 and b < _all_", {"a", "b"}),
+        ("a > 1 and b = &mv.", {"a", "b"}),
+        ("sum(first, b and c)", {"first", "b", "c"}),
+        ("sum(first, x in (1, 2))", {"first", "x"}),
+        ("not (first and b)", {"first", "b"}),
+        ("(a and b) + first", {"a", "b", "first"}),
+        ("first + (x in (1, 2))", {"first", "x"}),
+    )
+    nl = chr(10)
+    for expression, expected_reads in cases:
+        program = "data work.a;" + nl + "  set sdtm.ae;" + nl + f"  y = {expression};" + nl + "run;" + nl
+        blocks, ctx, events = build(program)
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        assert {
+            edge["from"].rsplit(".", 1)[-1].split(":")[-1].split("@")[0].lstrip("&")
+            for edge in ctx.edges if edge["type"] == "reads_variable"
+        } == expected_reads, expression
+        assert [finding["object"] for finding in ctx.findings if finding["type"] == "unknown_expression"] == [expression]
+
+
+def test_supported_nested_boolean_assignment_controls_remain_clean():
+    cases = (
+        ("sum(first, b)", {"first", "b"}),
+        ("first + b", {"first", "b"}),
+        ("not first", {"first"}),
+        ("sum(a, b and c)", {"a", "b", "c"}),
+    )
+    nl = chr(10)
+    for expression, expected_reads in cases:
+        program = "data work.a;" + nl + "  set sdtm.ae;" + nl + f"  y = {expression};" + nl + "run;" + nl
+        blocks, ctx, events = build(program)
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        actual_reads = {
+            edge["from"].rsplit(".", 1)[-1].split(":")[-1].split("@")[0].lstrip("&")
+            for edge in ctx.edges if edge["type"] == "reads_variable"
+        }
+        assert actual_reads == expected_reads, expression
+        assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings), expression
+
+
+def test_expression_term_cap_boundaries_reach_if_where_and_assignment_rhs():
+    nl = chr(10)
+
+    def assert_emitters(expression, expected_unknown):
+        for kind in ("if", "where", "assignment"):
+            statement = (
+                f"if {expression} then y = 1;" if kind == "if" else
+                f"where {expression};" if kind == "where" else
+                f"y = {expression};"
+            )
+            program = "data work.a;" + nl + "  set sdtm.ae;" + nl + "  " + statement + nl + "run;" + nl
+            blocks, ctx, events = build(program)
+            rules_data_step.apply(blocks[0], ctx, events)
+
+            unknown = [
+                finding["object"] for finding in ctx.findings
+                if finding["type"] == "unknown_expression"
+            ]
+            assert unknown == ([expression] if expected_unknown else []), (
+                expression[:80], kind,
+            )
+
+    for operator in ("and", "or"):
+        for operator_count in (200, 201):
+            operands = [f"x{index}" for index in range(operator_count + 1)]
+            expression = "sum(" + f" {operator} ".join(operands) + ")"
+            assert_emitters(expression, operator_count == 201)
+
+    for operator_count in (200, 201):
+        operands = [f"x{index}" for index in range(operator_count + 1)]
+        assert_emitters("sum(" + " + ".join(operands) + ")", operator_count == 201)
+        assert_emitters(" < ".join(operands), operator_count == 201)
+        mixed = "sum(" + " + ".join("x" for _ in operands) + " and y)"
+        assert_emitters(mixed, operator_count == 201)
+
+
+def test_boolean_expression_term_limit_is_safe_for_emitters():
+    def invoke_at_depth(depth, action):
+        if depth == 0:
+            return action()
+        return invoke_at_depth(depth - 1, action)
+
+    for depth in (0, 40):
+        for size in (150, 250, 950, 990, 3000):
+            expression = " and ".join(
+                f"a{index} > 1" for index in range(size)
+            )
+            for kind in ("if", "where", "assignment"):
+                statement = (
+                    f"if {expression} then y = 1;" if kind == "if" else
+                    f"where {expression};" if kind == "where" else
+                    f"y = {expression};"
+                )
+                program = (
+                    "data work.a;\n  set sdtm.ae;\n  "
+                    + statement + "\nrun;\n"
+                )
+
+                def analyze():
+                    blocks, ctx, events = build(program)
+                    rules_data_step.apply(blocks[0], ctx, events)
+                    return ctx
+
+                ctx = invoke_at_depth(depth, analyze)
+                unknown = [
+                    finding["object"] for finding in ctx.findings
+                    if finding["type"] == "unknown_expression"
+                ]
+                assert unknown == ([] if size == 150 else [expression]), (
+                    depth, size, kind,
+                )
+
+
+def test_condition_reads_keep_facts_only_on_direct_comparison_operands():
+    cases = (
+        ("x = upcase(y)", {"x": (None, "="), "y": (None, None)}),
+        ("x = (y)", {"x": (None, "="), "y": (None, "=")}),
+        ("1 < x", {"x": (None, "<")}),
+        ("'A' = x", {"x": (None, "=")}),
+        ("year(d) = 2020", {"d": (None, None)}),
+        ("substr(x, 1, 2) = 'AB'", {"x": (None, None)}),
+        ("sum(a + 1, b) > 3", {"a": (None, None), "b": (None, None)}),
+    )
+    nl = chr(10)
+    for condition, expected in cases:
+        program = "data work.a;" + nl + "  set sdtm.ae;" + nl + f"  if {condition} then target = 1;" + nl + "run;" + nl
+        blocks, ctx, events = build(program)
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable" and edge["source"]["rule"] == "data_step_if_condition"]
+        assert {
+            edge["from"].rsplit(".", 1)[-1]: (edge["value"], edge["operator"])
+            for edge in reads
+        } == expected, condition
+        assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings), condition
+
+
+def test_chained_comparison_reads_keep_each_link_operator_and_literal_fact():
+    cases = (
+        ("a < b < c", [("a", "<", None), ("b", "<", None), ("b", "<", None), ("c", "<", None)]),
+        ("x < y <= 3", [("x", "<", None), ("y", "<", None), ("y", "<=", "3")]),
+    )
+    nl = chr(10)
+    for condition, expected in cases:
+        program = "data work.a;" + nl + "  set sdtm.ae;" + nl + f"  if {condition} then target = 1;" + nl + "run;" + nl
+        blocks, ctx, events = build(program)
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable" and edge["source"]["rule"] == "data_step_if_condition"]
+        assert [
+            (edge["from"].rsplit(".", 1)[-1], edge["operator"], edge["value"])
+            for edge in reads
+        ] == expected, condition
+
+
+def test_boolean_and_in_condition_read_deduplication_uses_fact_keys():
+    nl = chr(10)
+    program = "data work.a;" + nl + "  set sdtm.ae;" + nl + "  if a > 1 and a < 5 then first_target = 1;" + nl + "  if x in (a, a) then second_target = 1;" + nl + "run;" + nl
+    blocks, ctx, events = build(program)
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable" and edge["source"]["rule"] == "data_step_if_condition"]
+    a_facts = [(edge["value"], edge["operator"]) for edge in reads if edge["from"].endswith(".a")]
+    assert a_facts == [("1", ">"), ("5", "<"), (None, None)]
+    x_reads = [edge for edge in reads if edge["from"].endswith(".x")]
+    assert len(x_reads) == 1
+
+
+def test_3000_term_if_where_and_assignment_chains_fall_back_unknown():
+    nl = chr(10)
+    condition_and = " and ".join(f"a > {i}" for i in range(3000))
+    condition_or = " or ".join(f"a > {i}" for i in range(3000))
+    rhs = " + ".join("a" for _ in range(3000))
+    programs = (
+        ("if", "if " + condition_and + " then target = 1;"),
+        ("where", "where " + condition_or + ";"),
+        ("rhs", "target = " + rhs + ";"),
+    )
+    for _label, statement in programs:
+        program = "data work.a;" + nl + "  set sdtm.ae;" + nl + "  " + statement + nl + "run;" + nl
+        blocks, ctx, events = build(program)
+        rules_data_step.apply(blocks[0], ctx, events)
+        assert any(finding["type"] == "unknown_expression" for finding in ctx.findings)
+
+
+def test_hundred_term_boolean_condition_emits_all_reads():
+    condition = " and ".join(f"x{i} > 0" for i in range(100))
+    blocks, ctx, events = build(
+        f"data work.a;\n  set sdtm.ae;\n  if {condition} then y = 1;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    reads = {
+        edge["from"].rsplit(".", 1)[-1]
+        for edge in ctx.edges
+        if edge["type"] == "reads_variable"
+        and edge["source"]["rule"] == "data_step_if_condition"
+    }
+    assert reads == {f"x{i}" for i in range(100)}
+    assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings)
+
+
+def test_select_when_boolean_condition_emits_reads_and_conditioned_by_edges():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n  select;\n"
+        "    when (a > 1 or b < 2) y = z;\n"
+        "  end;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert {edge["from"].rsplit(".", 1)[-1] for edge in ctx.edges if edge["type"] == "reads_variable"} == {"a", "b", "z"}
+    assert {edge["from"].rsplit(".", 1)[-1] for edge in ctx.edges if edge["type"] == "conditioned_by"} == {"a", "b"}
+    assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings)
+
+
+def test_unsupported_conditions_stay_unknown_without_variable_reads():
+    conditions = (
+        "lag(x) > 1",
+        "first.x",
+        "last.x = 1",
+        "x and y",
+        "x AND y > 1",
+        "a > 1 and b",
+        "x = a or b",
+        "x in (1:5)",
+        "x in (&mv)",
+        "x in (lag(x))",
+        "x in ()",
+        "x in (1,",
+        "x in (1, 2",
+        "x & y",
+        "x > 1 & y",
+        "x > 1 & y < 2",
+        "x | y",
+        "x > 1 | y < 2",
+        "&mv",
+        "first.x and y > 1",
+        "lag(x) > 1 or y > 2",
+        "x like 'A'",
+        "x ?? 'A'",
+        "x",
+        "a - b >= 2",
+        "a--b = 1",
+        "sum(of a--c) > 1",
+        "cats(x, best32.) = 'A'",
+        "of > 1",
+        "first = 'a'",
+        "last = 'a'",
+        "missing(a--b)",
+        "missing(upcase(&mv))",
+        "^missing(x)",
+        "-x > 0",
+        "-missing(x)",
+        "_all_ > 1",
+    )
+    for condition in conditions:
+        for statement_kind in ("if", "where"):
+            statement = (
+                f"if {condition} then y = 1;"
+                if statement_kind == "if"
+                else f"where {condition};"
+            )
+            blocks, ctx, events = build(
+                "data work.a;\n  set sdtm.ae;\n"
+                f"  {statement}\nrun;\n"
+            )
+            rules_data_step.apply(blocks[0], ctx, events)
+
+            assert not any(
+                edge["type"] in {"reads_variable", "conditioned_by"}
+                for edge in ctx.edges
+            ), (statement_kind, condition)
+            assert [
+                (finding["type"], finding["object"])
+                for finding in ctx.findings
+                if finding["type"] == "unknown_expression"
+            ] == [("unknown_expression", condition)], (statement_kind, condition)
+
+
+def test_if_compound_or_condition_emits_reads_without_garbled_literal():
+    blocks, ctx, events = build(
+        'data adam.adlb;\n  set sdtm.lb;\n'
+        '  if aesdth = "Y" or upcase(strip(aeout)) = "FATAL" then aedthfl = "Y";'
+        '\nrun;\n'
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    reads = [
+        edge for edge in ctx.edges
+        if edge["type"] == "reads_variable"
+        and edge["source"]["rule"] == "data_step_if_condition"
+    ]
+    assert {
+        edge["from"].rsplit(".", 1)[-1]: (edge["value"], edge["operator"])
+        for edge in reads
+    } == {"aesdth": ("Y", "="), "aeout": (None, None)}
+    assert {edge["from"].rsplit(".", 1)[-1] for edge in ctx.edges if edge["type"] == "conditioned_by"} == {"aesdth", "aeout"}
+    assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings)
+    assert not any(
+        node["type"] in {"Variable", "UnknownVariable"}
+        and node["id"].rsplit(".", 1)[-1] in {"upcase", "strip"}
+        for node in ctx.nodes
+    )
+
+
+def test_if_three_way_or_condition_emits_reads_and_conditioned_by_edges():
     blocks, ctx, events = build(
         'data adam.adlb;\n  set sdtm.lb;\n'
         '  if a = "Y" or b = "Y" or c = "Y" then d = "Y";\n'
@@ -1450,11 +2327,13 @@ def test_if_three_way_or_condition_declines_without_garbled_literal():
     )
     rules_data_step.apply(blocks[0], ctx, events)
 
-    assert not any(e["type"] == "reads_variable" for e in ctx.edges)
-    assert [
-        (finding["type"], finding["object"])
-        for finding in ctx.findings
-    ] == [("unknown_expression", 'a = "Y" or b = "Y" or c = "Y"')]
+    reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable"]
+    assert {
+        edge["from"].rsplit(".", 1)[-1]: (edge["value"], edge["operator"])
+        for edge in reads
+    } == {"a": ("Y", "="), "b": ("Y", "="), "c": ("Y", "=")}
+    assert {edge["from"].rsplit(".", 1)[-1] for edge in ctx.edges if edge["type"] == "conditioned_by"} == {"a", "b", "c"}
+    assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings)
 
 
 def test_if_simple_literal_condition_remains_unchanged():
@@ -1555,6 +2434,115 @@ def test_unbound_variable_in_multi_output_step_becomes_unknown_variable_with_fin
     assert read["from"] == unknown[0]["id"]
 
 
+def test_data_null_put_variables_do_not_get_unqualified_findings():
+    blocks, ctx, events = build(
+        "data _null_;\n  set sdtm.ae;\n  put 'a' x y;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert not any(
+        finding["type"] == "unqualified_variable_reference"
+        for finding in ctx.findings
+    )
+    assert not any(node["type"] == "UnknownVariable" for node in ctx.nodes)
+    assert not any(
+        edge["source"]["rule"] == "data_step_put" for edge in ctx.edges
+    )
+
+
+def test_multi_output_put_is_exempt_but_assignment_still_gets_findings():
+    blocks, ctx, events = build(
+        "data work.a work.b;\n"
+        "  set sdtm.ae;\n"
+        "  put 'a' x y;\n"
+        "  result = value;\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    findings = [
+        finding for finding in ctx.findings
+        if finding["type"] == "unqualified_variable_reference"
+    ]
+    assert {finding["source"]["rule"] for finding in findings} == {
+        "data_step_assignment"
+    }
+    assert {finding["object"] for finding in findings} == {"result", "value"}
+    assert {finding["suggested_action"] for finding in findings} == {
+        "Split the step so each output target has unambiguous variable "
+        "references, or confirm the ambiguity is intentional."
+    }
+    assert not any(
+        edge["source"]["rule"] == "data_step_put" for edge in ctx.edges
+    )
+
+
+def test_data_null_call_input_and_assignment_keep_unqualified_findings():
+    blocks, ctx, events = build(
+        "data _null_;\n"
+        "  set sdtm.ae;\n"
+        "  call symputx('flag', x);\n"
+        "  input y;\n"
+        "  result = value;\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    findings = [
+        finding for finding in ctx.findings
+        if finding["type"] == "unqualified_variable_reference"
+    ]
+    assert {finding["source"]["rule"] for finding in findings} == {
+        "data_step_call_symputx", "data_step_input", "data_step_assignment",
+    }
+    assert all(finding["suggested_action"] == (
+        "Identify the input dataset that owns this variable, or confirm the "
+        "unbound reference is intentional."
+    ) for finding in findings)
+
+
+def test_single_output_put_still_binds_reads_to_the_output():
+    blocks, ctx, events = build(
+        "data work.a;\n"
+        "  set sdtm.ae;\n"
+        "  put y;\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert any(
+        e["type"] == "reads_variable" and e["source"]["rule"] == "data_step_put"
+        for e in ctx.edges
+    )
+    assert not any(f["type"] == "unqualified_variable_reference" for f in ctx.findings)
+
+
+def test_conditional_put_in_null_step_flags_only_the_condition_variable():
+    blocks, ctx, events = build(
+        "data _null_;\n"
+        "  set sdtm.ae;\n"
+        "  if x = 1 then put y;\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    findings = [f for f in ctx.findings if f["type"] == "unqualified_variable_reference"]
+    assert [f["object"] for f in findings] == ["x"]
+
+
+def test_put_in_failed_single_target_step_emits_nothing():
+    blocks, ctx, events = build(
+        "data &out;\n"
+        "  set sdtm.ae;\n"
+        "  put y;\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert not any(f["type"] == "unqualified_variable_reference" for f in ctx.findings)
+    assert not any(e["source"]["rule"] == "data_step_put" for e in ctx.edges)
+
+
 def test_data_null_step_treats_bare_variables_as_unbound():
     """DATA _NULL_ writes no Dataset (section 12.8), so it has no single
     owning dataset for any bare variable reference either."""
@@ -1600,6 +2588,23 @@ def test_do_loop_produces_finding_and_no_variable_edge():
     assert len(findings) == 1
     assert findings[0]["status"] == "NOT_EXECUTED"
     assert "DO loop" in findings[0]["message"]
+
+
+def test_if_then_iterative_do_keeps_do_loop_wording():
+    blocks, ctx, events = build(
+        "data work.a;\n"
+        "  set sdtm.ae;\n"
+        "  if c then do i = 1 to 2;\n"
+        "    x = y;\n"
+        "  end;\n"
+        "run;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    findings = [f for f in ctx.findings if f["type"] == "deferred_variable_construct"]
+    assert len(findings) == 1
+    assert "DO loop" in findings[0]["message"]
+    assert "Guarded block" not in findings[0]["message"]
 
 
 def test_array_reference_produces_finding_and_no_variable_edge():
@@ -1741,6 +2746,217 @@ def test_array_reference_detection_ignores_a_brace_inside_a_string_literal():
     assert not any(f["type"] == "deferred_variable_construct" for f in ctx.findings)
     write = next(e for e in ctx.edges if e["type"] == "writes_variable")
     assert write["value"] == "not_an_array{"
+
+
+def test_whitelisted_assignment_calls_emit_derivations_and_argument_reads():
+    cases = (
+        ("upcase(x)", {"x"}),
+        ("coalesce(a, b, 'z')", {"a", "b"}),
+        ("substr(strip(x), 1, 3)", {"x"}),
+        ("ifc(a = 'Y', 'u', 'v')", {"a"}),
+    )
+    for expression, expected_reads in cases:
+        blocks, ctx, events = build(
+            f"data work.a;\n  set sdtm.ae;\n  y = {expression};\nrun;\n"
+        )
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        reads = [edge for edge in ctx.edges if edge["type"] == "reads_variable"]
+        assert {edge["from"] for edge in reads} == {
+            f"variable:work.a.{name}" for name in expected_reads
+        }, expression
+        assert all(
+            edge["value"] is None
+            and edge["operator"] is None
+            and edge["source"]["rule"] == "data_step_assignment"
+            for edge in reads
+        ), expression
+        derives = [edge for edge in ctx.edges if edge["type"] == "derives"]
+        assert len(derives) == 1, expression
+        assert derives[0]["to"] == "variable:work.a.y"
+        assert derives[0]["expression"] == expression
+        assert not any(f["type"] == "unknown_expression" for f in ctx.findings)
+        assert not any(
+            node["type"] in {"Variable", "UnknownVariable"}
+            and node["id"].rsplit(".", 1)[-1] in {
+                "upcase", "coalesce", "substr", "strip", "ifc",
+            }
+            for node in ctx.nodes
+        )
+
+
+def test_off_whitelist_nested_call_stays_unknown_but_reads_arguments():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n  y = upcase(lag(x));\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert {e["from"] for e in ctx.edges if e["type"] == "reads_variable"} == {
+        "variable:work.a.x",
+    }
+    assert [
+        (finding["type"], finding["object"])
+        for finding in ctx.findings
+        if finding["type"] == "unknown_expression"
+    ] == [("unknown_expression", "upcase(lag(x))")]
+    assert not any(
+        node["type"] in {"Variable", "UnknownVariable"}
+        and node["id"].endswith(".lag")
+        for node in ctx.nodes
+    )
+
+
+def test_off_whitelist_calls_stay_unknown_on_assignment_rhs():
+    for name in (
+        "put", "input", "lag", "dif", "symget", "resolve", "rand",
+        "ranuni", "today", "date", "time", "datetime", "dosubl",
+        "prxchange", "somefunc",
+    ):
+        expression = f"{name}(x)"
+        blocks, ctx, events = build(
+            f"data work.a;\n  set sdtm.ae;\n  y = {expression};\nrun;\n"
+        )
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        assert [
+            (finding["type"], finding["object"])
+            for finding in ctx.findings
+            if finding["type"] == "unknown_expression"
+        ] == [("unknown_expression", expression)], name
+
+
+def test_dotted_call_tokens_keep_legacy_unknown_reads():
+    cases = (
+        ("upcase(first.x)", {"x"}),
+        ("upcase(last.x)", {"x"}),
+        ("sum(a.b,c)", {"b", "c"}),
+        ("upcase(work.x)", {"x"}),
+    )
+    for expression, expected_reads in cases:
+        blocks, ctx, events = build(
+            f"data work.a;\n  set sdtm.ae;\n  y = {expression};\nrun;\n"
+        )
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        reads = {
+            edge["from"].rsplit(".", 1)[-1]
+            for edge in ctx.edges if edge["type"] == "reads_variable"
+        }
+        assert reads == expected_reads, expression
+        assert [
+            finding["object"] for finding in ctx.findings
+            if finding["type"] == "unknown_expression"
+        ] == [expression]
+
+
+def test_special_variable_lists_inside_calls_stay_unknown():
+    for expression, expected_reads in (
+        ("sum(_numeric_)", {"_numeric_"}),
+        ("cats(_all_)", set()),
+        ("cats(_character_)", {"_character_"}),
+    ):
+        blocks, ctx, events = build(
+            f"data work.a;\n  set sdtm.ae;\n  y = {expression};\nrun;\n"
+        )
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        assert {
+            edge["from"].rsplit(".", 1)[-1]
+            for edge in ctx.edges if edge["type"] == "reads_variable"
+        } == expected_reads
+        assert [
+            finding["object"] for finding in ctx.findings
+            if finding["type"] == "unknown_expression"
+        ] == [expression]
+
+
+def test_ranges_and_format_tokens_stay_unknown_without_fake_reads():
+    cases = (
+        ("sum(of x1-x3)", {"x1", "x2", "x3"}),
+        ("mean(of a1-a10)", {f"a{i}" for i in range(1, 11)}),
+        ("sum(OF x1-x3)", {"x1", "x2", "x3"}),
+        ("sum(x1--x3)", {"x1", "x3"}),
+        ("sum(of a--c)", {"a", "c"}),
+        ("cats(of _all_)", set()),
+        ("cats(x, best32.)", {"x"}),
+        ("cats(x, $char8.)", {"x"}),
+        ("cats(x, yymmdd10.)", {"x"}),
+        ("cats(x, z3.)", {"x"}),
+    )
+    for expression, expected_reads in cases:
+        blocks, ctx, events = build(
+            f"data work.a;\n  set sdtm.ae;\n  y = {expression};\nrun;\n"
+        )
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        reads = {
+            edge["from"].rsplit(".", 1)[-1]
+            for edge in ctx.edges if edge["type"] == "reads_variable"
+        }
+        assert reads == expected_reads, expression
+        assert [
+            (finding["type"], finding["object"])
+            for finding in ctx.findings
+            if finding["type"] == "unknown_expression"
+        ] == [("unknown_expression", expression)]
+        assert not any(
+            node["type"] in {"Variable", "UnknownVariable"}
+            and node["id"].rsplit(".", 1)[-1] in {"sum", "mean", "cats"}
+            for node in ctx.nodes
+        )
+
+
+def test_plain_double_hyphen_keeps_subtraction_of_negative_behavior():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n  y = x--z;\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert {
+        edge["from"].rsplit(".", 1)[-1]
+        for edge in ctx.edges if edge["type"] == "reads_variable"
+    } == {"x", "z"}
+    assert not any(finding["type"] == "unknown_expression" for finding in ctx.findings)
+
+
+def test_macro_references_inside_calls_stay_unknown_with_existing_reads():
+    cases = (
+        ('upcase("&x")', set()),
+        (
+            "substr(a, &n, 1)",
+            {"variable:work.a.a", "unknownvariable:n@3"},
+        ),
+    )
+    for expression, expected_reads in cases:
+        blocks, ctx, events = build(
+            f"data work.a;\n  set sdtm.ae;\n  y = {expression};\nrun;\n"
+        )
+        rules_data_step.apply(blocks[0], ctx, events)
+
+        assert {
+            edge["from"]
+            for edge in ctx.edges if edge["type"] == "reads_variable"
+        } == expected_reads
+        assert [
+            finding["object"] for finding in ctx.findings
+            if finding["type"] == "unknown_expression"
+        ] == [expression]
+
+
+def test_substr_pseudo_variable_assignment_keeps_current_noop_behavior():
+    blocks, ctx, events = build(
+        "data work.a;\n  set sdtm.ae;\n  substr(x,1,1)='Y';\nrun;\n"
+    )
+    rules_data_step.apply(blocks[0], ctx, events)
+
+    assert not any(
+        node["type"] in {"Variable", "UnknownVariable"} for node in ctx.nodes
+    )
+    assert not any(
+        edge["type"] in {"reads_variable", "writes_variable", "derives"}
+        for edge in ctx.edges
+    )
+    assert ctx.findings == []
 
 
 def test_rename_produces_reads_old_and_writes_new_variable_edges():

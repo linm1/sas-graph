@@ -4,10 +4,13 @@ from .graph_io import nodes_by_id
 
 # Section 18 fixes both the sections and their order. Findings whose status is
 # not listed here would silently vanish, so they get their own tail section.
+# UNQUALIFIED_VARIABLE is an addition beyond section 18: its findings used to
+# fall into the tail section with a "not a known status" banner.
 STATUS_SECTIONS = [
     ("BLOCKED", "BLOCKED"),
     ("REQUIRES_DECISION", "REQUIRES_DECISION"),
     ("UNRESOLVED_MACRO_VARIABLE", "UNRESOLVED_MACRO_VARIABLE"),
+    ("UNQUALIFIED_VARIABLE", "UNQUALIFIED_VARIABLE"),
     ("UNRESOLVED_MACRO_SOURCE", "UNRESOLVED_MACRO_SOURCE"),
     ("CONTRACT_INCOMPLETE", "CONTRACT_INCOMPLETE"),
     ("MACRO_CONFLICT", "MACRO_CONFLICT"),
